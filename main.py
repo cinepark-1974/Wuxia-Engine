@@ -44,7 +44,7 @@ from profession_pack import (
     build_protagonist_type_detail_block,
     auto_inject_profession_blocks,
 )
-from parser import parse_uploaded_file
+from parser import parse_brief
 from docx_builder import build_episode_docx, build_season_docx, build_proposal_docx
 
 
@@ -438,7 +438,7 @@ with tab1:
         )
         if uploaded is not None:
             try:
-                brief_text = parse_uploaded_file(uploaded)
+                brief_text = parse_brief(uploaded)
                 st.session_state.brief_text = brief_text
                 with st.expander("파싱된 기획서 내용 확인", expanded=False):
                     st.text_area("내용", brief_text, height=200, label_visibility="collapsed")
@@ -932,11 +932,14 @@ with tab3:
                 with col_tool4:
                     # DOCX 다운로드
                     try:
+                        # rating 파라미터: "19" / "15" 형식 (docx_builder 규약)
+                        rating_code = "19" if rating == "19금" else "15"
                         docx_bytes = build_episode_docx(
-                            st.session_state.concept_card,
-                            selected_ep,
                             current_ep,
-                            rating=rating,
+                            selected_ep,
+                            concept=st.session_state.concept_card,
+                            rating=rating_code,
+                            platform=platform,
                         )
                         title = st.session_state.concept_card.get("title", "wuxia")
                         safe_title = re.sub(r"[^\w\-]", "_", title)
