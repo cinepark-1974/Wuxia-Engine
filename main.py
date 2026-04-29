@@ -13,8 +13,6 @@ from prompt import (
     SYSTEM_PROMPT,
     build_system_prompt,
     build_parse_brief_prompt,
-    build_brief_to_seed_prompt,           # v2.0 신규
-    build_brief_episode_extraction_prompt, # v2.0 신규
     build_generate_concept_prompt,
     build_augment_concept_prompt,
     build_core_arc_prompt,
@@ -285,32 +283,13 @@ def call_claude_opus(prompt, max_tokens=8000, system=None):
     return call_claude(prompt, max_tokens=max_tokens, model=MODEL_OPUS, system=system)
 
 
-def safe_json(raw, debug=False):
-    """JSON 추출 & 파싱 — v2.0 강화판.
-
-    3단계 폴백:
-    1단계: 표준 JSON 추출 (마크다운 / trailing comma 처리)
-    2단계: 한국어 가이드 문구 제거 (예: "등에서 선택", "중 하나")
-    3단계: 잘린 JSON 자동 복구 (닫히지 않은 괄호 보강)
-
-    Args:
-        raw: LLM 원본 응답
-        debug: True면 실패 시 (None, error_info) 튜플 반환
-
-    Returns:
-        파싱된 dict/list 또는 None (debug=True면 (result, info))
-    """
-    error_info = {"raw_length": len(raw) if raw else 0, "stage_failed": None, "error": None}
-
+def safe_json(raw):
+    """JSON 추출 & 파싱 (마크다운·trailing comma 자동 처리)."""
     if not raw:
-        error_info["stage_failed"] = "empty_input"
-        return (None, error_info) if debug else None
+        return None
+    cleaned = re.sub(r"```json\s*", "", raw)
+    cleaned = re.sub(r"```\s*", "", cleaned).strip()
 
-    # ── 0단계: 마크다운 코드 블록 제거 ──
-    cleaned = re.sub(r"```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
-    cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE).strip()
-
-    # ── JSON 블록 추출 헬퍼 ──
     def extract_json_block(text):
         for open_c, close_c in [("{", "}"), ("[", "]")]:
             start = text.find(open_c)
@@ -343,110 +322,13 @@ def safe_json(raw, debug=False):
     block = extract_json_block(cleaned)
     if block:
         cleaned = block
-
-    # ── 제어 문자 제거 + trailing comma 정리 ──
     cleaned = "".join(ch for ch in cleaned if ch >= " " or ch in "\n\r\t")
     cleaned = re.sub(r",(\s*[}\]])", r"\1", cleaned)
 
-    # ── 1단계: 표준 파싱 시도 ──
     try:
-        return (json.loads(cleaned), error_info) if debug else json.loads(cleaned)
-    except json.JSONDecodeError as e1:
-        error_info["stage_failed"] = "stage1_standard"
-        error_info["error"] = str(e1)
-
-    # ── 2단계: 한국어 가이드 문구 제거 후 재시도 ──
-    # 예: "narrative_motifs": ["혈수", "기연" 등에서 선택]
-    # → "narrative_motifs": ["혈수", "기연"]
-    guide_patterns = [
-        r'\s*등에서\s*선택',
-        r'\s*중\s*하나',
-        r'\s*중\s*1개',
-        r'\s*중\s*1[~~-]\d+개',
-        r'\s*등\s*가능',
-        r'\s*해당되는?\s*것',
-        r'\s*해당하는?\s*것',
-        r'\s*없으면\s*빈\s*문자열',
-        r'\s*없으면\s*[""]"]',
-    ]
-    cleaned_v2 = cleaned
-    for pat in guide_patterns:
-        cleaned_v2 = re.sub(pat, '', cleaned_v2)
-    # trailing comma 다시 정리
-    cleaned_v2 = re.sub(r",(\s*[}\]])", r"\1", cleaned_v2)
-
-    try:
-        return (json.loads(cleaned_v2), error_info) if debug else json.loads(cleaned_v2)
-    except json.JSONDecodeError as e2:
-        error_info["stage_failed"] = "stage2_guide_removal"
-        error_info["error"] = str(e2)
-
-    # ── 3단계: 잘린 JSON 자동 복구 (닫히지 않은 괄호 보강) ──
-    # LLM 응답이 토큰 한도로 잘려서 끝부분이 손상된 경우
-    cleaned_v3 = cleaned_v2
-
-    # 마지막 정상 위치까지 자르기 (마지막 콜론·콤마 후로 잘려있으면 그 앞까지)
-    # ", "key": ... <끝>" 같은 패턴 제거
-    # 끝부분에서 마지막 닫는 괄호 위치 추적
-    last_safe = -1
-    depth_curly = 0
-    depth_square = 0
-    in_str = False
-    esc = False
-    for i, ch in enumerate(cleaned_v3):
-        if esc:
-            esc = False
-            continue
-        if ch == "\\":
-            esc = True
-            continue
-        if ch == '"' and not esc:
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == "{":
-            depth_curly += 1
-        elif ch == "}":
-            depth_curly -= 1
-            if depth_curly == 0 and depth_square == 0:
-                last_safe = i
-        elif ch == "[":
-            depth_square += 1
-        elif ch == "]":
-            depth_square -= 1
-            if depth_curly == 0 and depth_square == 0:
-                last_safe = i
-
-    # 닫히지 않은 괄호 자동 보강
-    if depth_curly > 0 or depth_square > 0:
-        # 끝 부분의 ", "incomplete_key": ..." 같은 미완성 항목 제거
-        # 마지막 정상적인 ", " 또는 "{" 또는 "[" 직후까지 자르기
-        last_comma_or_open = max(
-            cleaned_v3.rfind(","),
-            cleaned_v3.rfind("{"),
-            cleaned_v3.rfind("["),
-        )
-        if last_comma_or_open > 0:
-            cleaned_v3 = cleaned_v3[:last_comma_or_open]
-            # trailing comma 제거
-            cleaned_v3 = cleaned_v3.rstrip().rstrip(",")
-
-        # 여전히 닫히지 않은 괄호 보강
-        depth_curly = cleaned_v3.count("{") - cleaned_v3.count("}")
-        depth_square = cleaned_v3.count("[") - cleaned_v3.count("]")
-        for _ in range(depth_square):
-            cleaned_v3 += "]"
-        for _ in range(depth_curly):
-            cleaned_v3 += "}"
-
-    try:
-        return (json.loads(cleaned_v3), error_info) if debug else json.loads(cleaned_v3)
-    except json.JSONDecodeError as e3:
-        error_info["stage_failed"] = "stage3_truncation_recovery"
-        error_info["error"] = str(e3)
-
-    return (None, error_info) if debug else None
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
 
 
 # ══════════════════════════════════════════════
@@ -593,50 +475,21 @@ with tab1:
             try:
                 brief_text = parse_brief(uploaded)
                 st.session_state.brief_text = brief_text
-
-                # 분량 정보 표시
-                brief_len = len(brief_text)
-                col_info1, col_info2 = st.columns(2)
-                with col_info1:
-                    st.metric("기획서 분량", f"{brief_len:,}자")
-                with col_info2:
-                    if brief_len > 12000:
-                        st.warning(f"⚠️ 12,000자 초과 — 자동으로 앞·뒤 발췌하여 분석")
-                    else:
-                        st.success("✅ 분량 적정")
-
                 with st.expander("파싱된 기획서 내용 확인", expanded=False):
                     st.text_area("내용", brief_text, height=200, label_visibility="collapsed")
-
                 if st.button("🔍 기획서 분석 → 컨셉 카드 생성", use_container_width=True, key="brief_to_concept"):
-                    with st.spinner("기획서 분석 중... (긴 기획서는 1~2분 소요)"):
+                    with st.spinner("기획서 분석 중..."):
                         raw = call_claude(
                             build_parse_brief_prompt(brief_text),
                             max_tokens=MAX_TOKENS_STRUCTURE,
                         )
-                        # debug=True로 상세 진단 정보 받기
-                        parsed, debug_info = safe_json(raw, debug=True)
+                        parsed = safe_json(raw)
                         if parsed:
                             st.session_state.concept_card = parsed
                             st.success("✅ 컨셉 카드 생성 완료")
                             st.rerun()
                         else:
-                            st.error("❌ JSON 파싱 실패")
-                            with st.expander("🔍 디버그 정보 (개발자용)", expanded=True):
-                                st.write(f"**실패 단계**: {debug_info.get('stage_failed', '?')}")
-                                st.write(f"**원본 길이**: {debug_info.get('raw_length', 0):,}자")
-                                st.write(f"**오류 메시지**: {debug_info.get('error', '?')}")
-                                st.markdown("**LLM 원본 응답 (앞 2000자)**")
-                                st.code(raw[:2000] if raw else "(빈 응답)", language="json")
-                                if raw and len(raw) > 2000:
-                                    st.markdown("**LLM 원본 응답 (끝 1000자)**")
-                                    st.code(raw[-1000:], language="json")
-                            st.info(
-                                "💡 해결 방법:\n"
-                                "1. **기획서가 너무 긴 경우**: 핵심 부분만 별도 파일로 줄여서 업로드\n"
-                                "2. **결말 정보 누락**: 위 응답이 중간에 잘렸다면 max_tokens 한도 초과 — 짧은 기획서로 재시도\n"
-                                "3. **재시도**: 같은 파일 그대로 다시 버튼 클릭 (LLM 응답 변동성 있음)"
-                            )
+                            st.error("❌ JSON 파싱 실패. 다시 시도해주세요.")
             except Exception as e:
                 st.error(f"파일 읽기 실패: {e}")
 
