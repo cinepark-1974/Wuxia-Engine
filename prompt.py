@@ -874,6 +874,12 @@ PROTAGONIST_TYPES = {
         "works": ["묵향", "영웅문"],
         "formulas": ["F6"],
         "bible_fields": ["출신", "결핍", "재능", "멘토"],
+        "subtypes": {
+            "기본형": "재능과 성품을 갖추고 정통 무림에 입문하는 표준 정통 주인공.",
+            "노력형": "재능 부족하나 끈기로 극복. 성장 곡선 길고 카타르시스 누적형.",
+            "은거고수후예형": "비범한 혈통이나 본인은 모름. 후반 출생의 비밀.",
+            "복수형": "가문/사문 멸문 후 복수를 위해 입문. F6의 하드코어 변주.",
+        },
     },
     "회귀자": {
         "label": "회귀자",
@@ -887,6 +893,13 @@ PROTAGONIST_TYPES = {
             "회귀_시점", "미래_지식_범위", "회귀_횟수",
             "전생_원수", "나비효과_변수",
         ],
+        "subtypes": {
+            "단일회귀형": "1회 회귀. 전생 기억 완전. 가장 보편적.",
+            "다중회귀형": "여러 번 회귀. 회귀마다 다른 변수.",
+            "조건부회귀형": "특정 조건 충족 시만 회귀 능력 발동.",
+            "흑화회귀형": "전생 트라우마로 흑화한 채 회귀. 광마회귀형.",
+            "타인회귀형": "주인공이 아닌 타인이 회귀. 주인공이 그 변화에 휘말림.",
+        },
     },
     "전생자_이세계": {
         "label": "이세계 전생자",
@@ -900,6 +913,13 @@ PROTAGONIST_TYPES = {
             "숙주_원래_정체", "숙주_몸_상태", "숙주_관계",
             "현대_지식_수준", "귀환_가능성",
         ],
+        "subtypes": {
+            "현대인전생형": "현대 한국인 → 무림. 가장 보편적.",
+            "전직군인형": "현대 군인·특수부대 출신. 전술·체력 치트.",
+            "의료인형": "의사·간호사. 의술 치트로 신의 등극.",
+            "엔지니어형": "공학 지식. 기관·진법·기보 제작 치트.",
+            "이중전생형": "이미 한 번 다른 세계로 전생한 경험. 두 번째 전생.",
+        },
     },
     "빙의자": {
         "label": "빙의자",
@@ -912,6 +932,13 @@ PROTAGONIST_TYPES = {
             "빙의_유형", "빙의_대상", "원래_정체",
             "원작_지식", "사망_플래그", "정체_은폐_전략",
         ],
+        "subtypes": {
+            "일반빙의형": "소설/만화 등 원작 작품의 인물에 빙의.",
+            "원작악역빙의형": "원작 악역으로 빙의. 사망 플래그 회피가 목표.",
+            "원작엑스트라빙의형": "원작 단역에 빙의. 자유도 높음.",
+            "차사부빙의형": "사부의 몸에 빙의. 제자들에게 정체 은폐 핵심 갈등.",
+            "교차빙의형": "원작 인물과 영혼이 교차. 양쪽 세계 모두 진행.",
+        },
     },
     "시스템_보유자": {
         "label": "시스템 보유자",
@@ -925,8 +952,37 @@ PROTAGONIST_TYPES = {
             "시스템_능력", "시스템_제약", "히든_클래스",
             "경험치_획득_방법", "현재_레벨",
         ],
+        "subtypes": {
+            "획득형": "특정 사건으로 시스템 획득. 출처가 핵심 떡밥.",
+            "각성형": "평범한 일상 중 갑자기 자연 각성. 학원 무협에 적합.",
+            "계약형": "외부 존재(천기/마계/고대 유산)와의 계약으로 시스템 획득. 대가 존재.",
+            "천부형": "태생부터 시스템 보유. 가문 혈통과 결합.",
+            "기보부착형": "특정 무기·기보에 시스템이 붙어 있음. 분리 시 능력 상실.",
+        },
     },
 }
+
+
+def get_protagonist_subtype_block(protagonist_type_key, subtype_key=""):
+    """주인공 유형의 subtype 상세 블록 반환."""
+    if not protagonist_type_key or protagonist_type_key not in PROTAGONIST_TYPES:
+        return ""
+    ptype = PROTAGONIST_TYPES[protagonist_type_key]
+    subtypes = ptype.get("subtypes", {})
+    if not subtypes:
+        return ""
+
+    if subtype_key and subtype_key in subtypes:
+        return f"### 세부 유형: {subtype_key}\n{subtypes[subtype_key]}"
+
+    # 전체 목록 반환
+    blocks = [f"### {ptype['label']}의 세부 유형 (선택 가능)"]
+    for sk, desc in subtypes.items():
+        blocks.append(f"- **{sk}**: {desc}")
+    return "\n".join(blocks)
+
+
+
 
 
 def get_protagonist_type_block(protagonist_type_key):
@@ -1756,52 +1812,250 @@ FLOW_INDUCTION_RULES = """[독자 몰입 유도 규칙 — 강종현(2024) Flow 
 # ═══════════════════════════════════════════════════
 
 def build_parse_brief_prompt(brief_text):
-    """기획서 파싱 프롬프트."""
-    return f"""다음은 무협 웹소설 기획서입니다. 분석해서 JSON 형식으로 구조화하세요.
+    """기획서 텍스트를 무협 컨셉 카드 JSON으로 파싱.
 
-기획서:
----
+    [v2.0 안정화] 웹소설 엔진 v3.0 패턴 이식:
+    - 분량 보호: 12,000자 초과 시 앞부분 + 끝부분 발췌
+    - JSON 출력 강제: 마크다운 코드 블록 / 가이드 문구 혼입 방지
+    - 빈 필드 명시 규칙: 추론 불가 시 빈 문자열·빈 배열로 남김
+    """
+    # ── 분량 보호: 토큰 한도 초과 방지 ──
+    MAX_BRIEF_CHARS = 12000  # 약 15K~20K 토큰 (한국어 기준)
+    if len(brief_text) > MAX_BRIEF_CHARS:
+        head = brief_text[: MAX_BRIEF_CHARS - 2000]
+        tail = brief_text[-2000:]
+        brief_text = head + "\n\n[...중략...]\n\n" + tail
+
+    # ── 선택지 리스트를 별도 블록으로 분리 (JSON 안에 한국어 가이드 혼입 방지) ──
+    formula_keys = list(WUXIA_FORMULAS.keys())
+    protagonist_type_keys = list(PROTAGONIST_TYPES.keys())
+    motif_keys = list(NARRATIVE_MOTIFS.keys())
+    tone_preset_keys = list(NARRATIVE_TONE_PRESETS.keys())
+
+    return f"""다음은 무협 웹소설 기획서입니다. 분석해서 무협 컨셉 카드 JSON으로 변환하세요.
+
+[기획서 원문]
 {brief_text}
----
 
-다음 JSON 스키마로 반환하세요 (마크다운·설명 제외):
+[변환 지침]
+1. 기획서에 명시된 내용만 추출. 없는 내용은 빈 문자열("") 또는 빈 배열([])로 남김.
+2. 추측·창작 금지. 명시 안 된 사항은 모두 빈값으로.
+3. 6대 무협 공식 중 가장 적합한 것을 formula_key에 정확한 키 형식으로:
+   - 선택지: {formula_keys}
+4. 5종 주인공 유형 중 1개를 protagonist_type에 정확한 키 형식으로:
+   - 선택지: {protagonist_type_keys}
+5. 무협 모티프(narrative_motifs)는 다음 키 중 1~3개 배열로:
+   - 선택지: {motif_keys}
+6. 작품 톤 프리셋(tone_preset)은 다음 키 중 1개:
+   - 선택지: {tone_preset_keys}
+7. 등급(target_rating)은 "15금" 또는 "19금"만 사용.
 
+[JSON 출력 — 다음 구조를 정확히 따를 것. 마크다운·설명·주석 절대 금지]
 {{
-  "title": "작품 제목",
-  "logline": "한 줄 로그라인",
-  "genre": "무협 / 판타지 무협 / 여성향 무협 등",
-  "formula_key": "F1_회귀_먼치킨_문파재건 등 (6대 공식 중 추정)",
-  "protagonist_type": "정통_주인공 / 회귀자 / 전생자_이세계 / 빙의자 / 시스템_보유자",
+  "title": "",
+  "logline": "",
+  "genre": "",
+  "formula_key": "",
+  "protagonist_type": "",
   "protagonist": {{
-    "name": "이름",
-    "age": "나이",
-    "faction": "소속 (구파일방 / 세가 / 사파 / 낭인 등)",
-    "profession": "직업 (18개 중)",
-    "cultivation_stage": "현재 경지",
-    "desire": "욕망",
-    "lack": "결핍",
-    "backstory": "배경 요약"
+    "name": "",
+    "age": "",
+    "faction": "",
+    "profession": "",
+    "cultivation_stage": "",
+    "desire": "",
+    "lack": "",
+    "backstory": ""
   }},
-  "female_lead": {{ 
-    "name": "", "age": "", "faction": "", "profession": "", 
-    "cultivation_stage": "", "relation_to_protagonist": "" 
+  "female_lead": {{
+    "name": "",
+    "age": "",
+    "faction": "",
+    "profession": "",
+    "cultivation_stage": "",
+    "relation_to_protagonist": ""
   }},
-  "male_lead": {{ "name": "", "age": "", "faction": "", "relation_to_protagonist": "" }},
-  "villain": {{ "name": "", "faction": "", "motive": "" }},
-  "mentor": {{ "name": "", "faction": "" }},
+  "male_lead": {{
+    "name": "",
+    "age": "",
+    "faction": "",
+    "relation_to_protagonist": ""
+  }},
+  "villain": {{
+    "name": "",
+    "faction": "",
+    "motive": ""
+  }},
+  "mentor": {{
+    "name": "",
+    "faction": ""
+  }},
   "setting": {{
-    "era": "명말청초 / 송대 / 가상 왕조 등",
-    "location": "주요 지리",
-    "worldbuilding_notes": "특이 사항"
+    "era": "",
+    "location": "",
+    "worldbuilding_notes": ""
   }},
-  "narrative_motifs": ["혈수", "기연", "의형제" 등에서 선택],
-  "target_platform": "문피아 / 카카오페이지 / 네이버웹소설 등",
-  "target_rating": "15금 / 19금",
-  "tone_preset": "회귀_먼치킨_문파재건 / 이세계_전생_무협 등 6개 중",
-  "core_concept_notes": "기획서의 핵심 아이디어·차별화 포인트"
+  "narrative_motifs": [],
+  "target_platform": "",
+  "target_rating": "",
+  "tone_preset": "",
+  "core_concept_notes": ""
 }}
 
-JSON만 반환하세요. 설명·마크다운 없이."""
+[중요 규칙]
+- 위 JSON 객체만 출력하세요. 마크다운 코드 블록(```json ... ```) 없이.
+- 설명·주석·"등에서 선택" 같은 가이드 문구를 출력값에 포함하지 마세요.
+- 빈값은 "" 혹은 [] 사용. null 사용 금지.
+- 한국어 키 이름은 위 스키마와 정확히 동일하게 유지."""
+
+
+def build_brief_to_seed_prompt(brief_text, episode_structure=None):
+    """[v2.0 신규 — 웹소설 엔진 v3.0 패턴 이식]
+    기획서를 IdeaSeed JSON으로 직접 변환 (분량 큰 기획서·완성형 기획서용).
+
+    build_parse_brief_prompt가 간단한 컨셉 카드를 생성하는 반면,
+    이 함수는 wuxia-engine의 IdeaSeed JSON 탭에 그대로 업로드 가능한 형식으로 변환.
+
+    회차 구조가 별도 추출됐으면 episode_structure 매개변수로 전달.
+    """
+    MAX_BRIEF_CHARS = 12000
+    if len(brief_text) > MAX_BRIEF_CHARS:
+        head = brief_text[: MAX_BRIEF_CHARS - 2000]
+        tail = brief_text[-2000:]
+        brief_text = head + "\n\n[...중략...]\n\n" + tail
+
+    formula_keys = list(WUXIA_FORMULAS.keys())
+    protagonist_type_keys = list(PROTAGONIST_TYPES.keys())
+    motif_keys = list(NARRATIVE_MOTIFS.keys())
+
+    ep_block = ""
+    if episode_structure:
+        ep_block = f"\n[회차 구조 — 별도 추출됨]\n{episode_structure}\n"
+
+    return f"""당신은 BLUE JEANS WUXIA ENGINE의 기획서 → IdeaSeed JSON 변환 전문가입니다.
+주어진 무협 웹소설 기획서를 wuxia-engine v2.0 호환 IdeaSeed JSON으로 변환하세요.
+
+[기획서 원문]
+{brief_text}
+{ep_block}
+
+[사용 가능한 분류]
+- 무협 공식 (6종): {formula_keys}
+- 주인공 유형 (5종): {protagonist_type_keys}
+- 모티프 (17종): {motif_keys}
+
+[JSON 출력 스키마 — 정확히 이 구조로]
+{{
+  "_idea_engine_meta": {{
+    "version": "v1.0",
+    "generated_at": "ISO 8601 시각",
+    "project_id": "영문대문자_S1 형식",
+    "verdict": "GO|CONDITIONAL|NOGO",
+    "hook_score": 0,
+    "source": "BLUE JEANS Wuxia Brief → IdeaSeed (자동 변환)"
+  }},
+  "title": "",
+  "raw_idea": "한 단락(300~600자) 핵심 시놉시스",
+  "genre": "",
+  "target_market": "",
+  "format": "웹소설 → 웹툰 → 영상물 형식",
+  "locked_seed": {{
+    "project_id": "",
+    "title_kr": "",
+    "title_en": "",
+    "locked_logline": "한 문장(80자 이내)",
+    "locked_genre": {{"primary": "", "secondary": "", "tertiary": ""}},
+    "locked_format": {{"primary": "", "episode_count": "", "runtime": "", "ip_strategy": ""}},
+    "locked_target": {{"domestic": "", "global": ""}},
+    "locked_theme": {{"surface": "", "deep": ""}},
+    "locked_references": [],
+    "locked_hook_score": 0,
+    "locked_market_stars": {{"domestic": 0, "global": 0, "ott": 0}},
+    "locked_distribution_priority": "",
+    "locked_risks_to_address": []
+  }},
+  "executive_summary": "5문장 이내 임원 브리핑",
+  "pending_decisions": [],
+  "_v3_classification_wuxia": {{
+    "comment": "Wuxia Engine v2.0 호환 분류",
+    "wuxia_formula_main": "",
+    "wuxia_formula_sub": "",
+    "protagonist_type": "",
+    "protagonist_subtype": "",
+    "wuxia_motifs": {{"primary": "", "secondary": [], "tertiary": []}},
+    "movement_code": "",
+    "target_consumption_tier": [],
+    "target_persona": "",
+    "work_orientation": "male",
+    "narrative_tone": "",
+    "platform_priority": []
+  }}
+}}
+
+[변환 규칙]
+1. locked_seed의 모든 필드를 채우세요. 추론 불가 시 빈 문자열/빈 배열.
+2. _v3_classification_wuxia의 wuxia_formula_main, protagonist_type은 위 키 형식 정확히 일치.
+3. hook_score 0~50 사이 정수. 35+ → GO, 25~34 → CONDITIONAL, 24- → NOGO.
+4. 작품 지향(work_orientation)은 무협이면 보통 "male", 검귀물·여협물이면 "female".
+5. pending_decisions에 작가 결정 필요 사항을 명확한 질문 형태로.
+
+[중요]
+JSON 객체만 출력. 마크다운 코드 블록·설명·주석 절대 금지."""
+
+
+def build_brief_episode_extraction_prompt(brief_text, episode_structure_hint=""):
+    """[v2.0 신규 — 웹소설 엔진 v3.0 패턴 이식]
+    기획서 안에 회차별 시놉시스가 있으면 추출.
+
+    이 빌더는 build_brief_to_seed_prompt와 별도로 호출되며,
+    회차 구조가 명시된 기획서(예: 아미고 ACT I 1~10화)에서 회차별 정보 추출.
+    """
+    MAX_BRIEF_CHARS = 12000
+    if len(brief_text) > MAX_BRIEF_CHARS:
+        head = brief_text[: MAX_BRIEF_CHARS - 2000]
+        tail = brief_text[-2000:]
+        brief_text = head + "\n\n[...중략...]\n\n" + tail
+
+    hint_block = ""
+    if episode_structure_hint:
+        hint_block = f"\n[힌트] 다음과 같은 회차 구조가 있는 것으로 보입니다:\n{episode_structure_hint}\n"
+
+    return f"""다음 무협 기획서에서 회차별 시놉시스를 추출하세요.
+
+[기획서 원문]
+{brief_text}
+{hint_block}
+
+[추출 지침]
+1. ACT I/II/III 같은 막 구조나 회차별 시놉시스가 있으면 추출.
+2. 없으면 빈 배열 [] 반환.
+3. 회차 번호가 명시된 경우만 추출 (추측·창작 금지).
+
+[JSON 출력]
+{{
+  "has_episode_structure": true,
+  "total_episodes_estimated": 50,
+  "act_structure": [
+    {{"act": 1, "episodes": "1~10", "title": "", "summary": ""}},
+    {{"act": 2, "episodes": "11~30", "title": "", "summary": ""}},
+    {{"act": 3, "episodes": "31~50", "title": "", "summary": ""}}
+  ],
+  "episodes": [
+    {{"ep_number": 1, "title": "", "synopsis": ""}},
+    {{"ep_number": 2, "title": "", "synopsis": ""}}
+  ]
+}}
+
+만약 회차 구조가 없으면:
+{{
+  "has_episode_structure": false,
+  "total_episodes_estimated": 0,
+  "act_structure": [],
+  "episodes": []
+}}
+
+[중요]
+JSON만 출력. 마크다운·설명 없이."""
 
 
 def build_generate_concept_prompt(idea_text, genre=""):
@@ -2317,3 +2571,969 @@ def build_reader_simulation_prompt(episode_text, persona, genre=""):
 7. 구독 해지 가능성이 있다면 왜?
 
 솔직하게, 공손하지 말고. 후기 한 편처럼 자연스럽게 쓰기."""
+
+
+# ═══════════════════════════════════════════════════
+# [v2.0 Phase A] WUXIA_CHARACTER_ROLES — 무협 인물 역할 12종
+# webnovel-engine v3.0의 CHARACTER_ROLE_TAXONOMY를 무협용으로 재정의
+# ═══════════════════════════════════════════════════
+
+WUXIA_CHARACTER_ROLES = {
+    "사부_정신적_스승": {
+        "label": "사부 / 정신적 스승",
+        "description": "주인공에게 무공·도리를 가르치는 절대적 존재. 초기에는 멘토, 후반에는 보조 혹은 회상의 대상.",
+        "examples": ["화산귀환의 청명 사조", "광마회귀의 무명 사부", "묵향의 천마"],
+        "function": "초기 인도자, 후반엔 보조 혹은 영적 지주",
+        "subtypes": ["은거고수형", "엄격무비형", "방랑선사형", "정체은폐형"],
+        "wuxia_specific": "사부의 죽음·실종은 주인공의 가장 강력한 동기 부여 장치",
+    },
+    "사형_검증된_라이벌": {
+        "label": "사형 / 검증된 라이벌",
+        "description": "주인공보다 먼저 입문한 동문 선배. 능력은 검증되었으나 주인공 성장에 추월당함. 갈등의 핵심 축.",
+        "examples": ["대다수 무협의 1번째 동문 라이벌"],
+        "function": "성장 게이지, 협력자 또는 적대자로 분기",
+        "subtypes": ["선의경쟁형", "질투_적대형", "타락_배신형", "충성_조력형"],
+        "wuxia_specific": "사형의 흑화·배신은 중반 반전의 표준 패턴",
+    },
+    "사매_사제_따르는_후배": {
+        "label": "사매 / 사제 / 따르는 후배",
+        "description": "주인공을 따르는 후배. 보호 동기 + 성장 거울. 청춘 무협에서는 로맨스 후보.",
+        "examples": ["다양한 작품의 막내 동문"],
+        "function": "주인공 성장의 증인, 인간미 부여, 로맨스 후보",
+        "subtypes": ["순수_따름형", "로맨스_후보형", "재능_각성형", "비밀_보유형"],
+        "wuxia_specific": "사매의 위기는 주인공의 각성 트리거로 자주 활용",
+    },
+    "숙적_복수의_대상": {
+        "label": "숙적 / 복수의 대상",
+        "description": "전생 또는 본편 초기에 주인공을 죽이거나 배신한 인물. 복수 동력의 핵심.",
+        "examples": ["화산귀환의 천마", "광마회귀의 배신자들"],
+        "function": "복수 동력의 핵심, 최종 보스 혹은 시즌 빌런",
+        "subtypes": ["전생_원수형", "가문_원수형", "사문_배신형", "맹주_타락형"],
+        "wuxia_specific": "숙적은 주인공보다 강하게 시작해 점진적으로 추월당해야 카타르시스 극대화",
+    },
+    "정파_원로_가르침": {
+        "label": "정파 원로 / 가르침의 어른",
+        "description": "정파의 큰 어른. 주인공을 인정하거나 시험. 사부와 다르게 직접 가르치진 않으나 결정적 인정 부여.",
+        "examples": ["구파일방 장문인", "오대세가 가주"],
+        "function": "정파 입성 게이트, 권위의 인정",
+        "subtypes": ["권위_인정형", "시험_부여형", "비전_전수형", "은퇴_조언형"],
+        "wuxia_specific": "원로의 인정은 강호 진입의 통과의례",
+    },
+    "사파_타락한_조력자": {
+        "label": "사파 타락한 조력자",
+        "description": "악명 높지만 주인공에게는 호의적인 사파 인물. 도덕적 회색지대 제공, 비주류 자원 공급.",
+        "examples": ["사파 출신 정보상", "흑도 객잔 주인"],
+        "function": "도덕적 회색지대 제공, 비주류 자원·정보",
+        "subtypes": ["은퇴_낭인형", "정보상형", "흑도_의리형", "마교_탈주형"],
+        "wuxia_specific": "사파 조력자와의 관계는 정파 동료들과의 갈등 트리거",
+    },
+    "은인_생명의_빚": {
+        "label": "은인 / 생명의 빚",
+        "description": "주인공이 빚진 인물. 도덕적 부채로 서사 굴림. 후반에 빚을 갚는 회수 장치.",
+        "examples": ["기연을 준 노인", "위기에서 구해준 협객"],
+        "function": "도덕적 부채로 서사 굴림, 후반 보은 회수",
+        "subtypes": ["기연_제공형", "구명_은인형", "스승_은인형", "유언_위탁형"],
+        "wuxia_specific": "은인의 유언은 주인공의 장기 미션을 결정",
+    },
+    "동문_의형제": {
+        "label": "동문 / 의형제",
+        "description": "혈연 없이 결의로 맺은 형제. 동맹의 핵심, 배신 가능성도 잠재.",
+        "examples": ["삼국지식 의형제 결의", "강호 동행자"],
+        "function": "동맹의 핵심, 배신 가능성도",
+        "subtypes": ["충성_의형제형", "배신_의형제형", "이상_동지형", "라이벌_의형제형"],
+        "wuxia_specific": "의형제의 죽음은 주인공의 광폭 모드 트리거",
+    },
+    "배신자_표면적_동맹": {
+        "label": "배신자 / 표면적 동맹",
+        "description": "동맹인 척하지만 결국 배신. 중반 반전의 핵심.",
+        "examples": ["내부 첩자", "이중 신분의 적"],
+        "function": "중반 반전, 신뢰 관계의 파괴",
+        "subtypes": ["사문_첩자형", "이중첩자형", "타락_배신형", "사상_배신형"],
+        "wuxia_specific": "배신자의 정체는 12-18화에서 폭로되는 것이 표준",
+    },
+    "무림맹주_세계_권력자": {
+        "label": "무림맹주 / 세계 권력자",
+        "description": "강호의 권력자. 주인공의 상위 목표. 정파 최고 권위.",
+        "examples": ["무림맹주", "황실 권력자"],
+        "function": "최상위 정치 게이트",
+        "subtypes": ["정의로운_맹주형", "타락한_맹주형", "은퇴_권력자형", "야망_권력자형"],
+        "wuxia_specific": "맹주가 적이 되는 경우 강호 전체가 주인공의 적이 됨",
+    },
+    "마교주_절대악": {
+        "label": "마교주 / 절대악",
+        "description": "강호 전체를 위협하는 절대악. 최종 보스 또는 시즌 후반 빌런.",
+        "examples": ["천마", "혈교 교주", "마교 장로"],
+        "function": "최종 보스 또는 시즌 후반 빌런",
+        "subtypes": ["광기형", "신념형", "비극형", "초월형"],
+        "wuxia_specific": "마교주는 단순 악이 아니라 강호와 다른 가치관을 가진 존재로 묘사해야 입체적",
+    },
+    "천외천_초월자": {
+        "label": "천외천 / 초월자",
+        "description": "강호 밖의 초월적 존재 (도사·은둔 고수 등). 치트 아이템 또는 깨달음 제공.",
+        "examples": ["전설의 신선", "잊혀진 무공의 창시자"],
+        "function": "치트 아이템 또는 깨달음 제공",
+        "subtypes": ["은거선인형", "잊혀진_창시자형", "이공간_존재형", "고대_유산형"],
+        "wuxia_specific": "천외천의 등장은 후반부 파워업의 마지막 카드",
+    },
+}
+
+
+def get_character_role_block(role_keys=None, compact=False):
+    """무협 인물 역할 블록 생성.
+    role_keys: 특정 역할 키 리스트 (None이면 전체)
+    compact: 짧은 버전 (인물 바이블 작성 시)
+    """
+    if role_keys is None:
+        role_keys = list(WUXIA_CHARACTER_ROLES.keys())
+
+    blocks = ["## 무협 인물 역할 (12종)"]
+    for key in role_keys:
+        if key not in WUXIA_CHARACTER_ROLES:
+            continue
+        role = WUXIA_CHARACTER_ROLES[key]
+        if compact:
+            blocks.append(f"- **{role['label']}**: {role['description'][:60]}...")
+        else:
+            blocks.append(f"\n### {role['label']}")
+            blocks.append(f"{role['description']}")
+            blocks.append(f"- 기능: {role['function']}")
+            if role.get("subtypes"):
+                blocks.append(f"- 세부 유형: {', '.join(role['subtypes'])}")
+            blocks.append(f"- 무협 특수 활용: {role['wuxia_specific']}")
+    return "\n".join(blocks)
+
+
+# ═══════════════════════════════════════════════════
+# [v2.0 Phase A] WUXIA_HERO_MIND_FLOW — 남성향 3단계 마음 흐름
+# webnovel-engine v3.0 HERO_MIND_FLOW_PATTERNS의 무협 변주
+# ═══════════════════════════════════════════════════
+
+WUXIA_HERO_MIND_FLOW = {
+    "stages": [
+        {
+            "stage": 1,
+            "name": "각성·동기 발현",
+            "description": "회귀·빙의·각성 직후 또는 단전 폐맥 후 절망에서 결단",
+            "inner_state_keywords": [
+                "분노", "결단", "냉정", "복수의지", "절망", "각오", "처절한_의지",
+            ],
+            "behavior_keywords": [
+                "은밀행동", "정보수집", "조용한_성장", "기연추구", "약자_거두기", "은혜_갚기",
+            ],
+            "wuxia_specific": "단전 폐맥 → 재구축 단계 포함 (1단계 절망 강화). 회귀자는 전생 기억 자각 직후 분노가 핵심.",
+            "typical_episodes_pct": "0~20%",
+            "key_scenes": [
+                "각성·회귀 순간",
+                "기연 1차 획득 (영약·비급)",
+                "첫 번째 작은 승리",
+                "사부 또는 멘토와의 만남",
+            ],
+        },
+        {
+            "stage": 2,
+            "name": "관문 통과·세력 확장",
+            "description": "문파 입문, 비급 획득, 라이벌 격파, 명성 획득",
+            "inner_state_keywords": [
+                "전략적", "체계적", "사이다카타르시스", "확신", "성장의_쾌감", "야심",
+            ],
+            "behavior_keywords": [
+                "관문돌파", "비급획득", "동맹_규합", "약자_가르침", "라이벌_제압", "명성_획득",
+            ],
+            "wuxia_specific": "전대 고수 추월 모멘트 필수 (2단계 절정). 사형/사부의 무공을 능가하는 순간이 핵심 카타르시스.",
+            "typical_episodes_pct": "20~70%",
+            "key_scenes": [
+                "사형/라이벌 첫 격파",
+                "정파 진입 혹은 사문 인정",
+                "사부 무공 추월",
+                "강호 십대고수 진입",
+                "자기 세력 형성",
+            ],
+        },
+        {
+            "stage": 3,
+            "name": "목표 진화·재정의",
+            "description": "개인 복수 → 강호 정의 / 천하제일 → 강호 은퇴",
+            "inner_state_keywords": [
+                "깨달음", "초탈", "내려놓음", "성숙", "책임감", "철학적_사색",
+            ],
+            "behavior_keywords": [
+                "대의_추구", "후학_양성", "은퇴_고려", "정파_규합", "마교_정복", "강호_평정",
+            ],
+            "wuxia_specific": "천하제일 도달 후 강호 은퇴 패턴 권장. 무협의 동양적 결말: 산속 은거 또는 무공 봉인.",
+            "typical_episodes_pct": "70~100%",
+            "key_scenes": [
+                "최종 빌런 격파",
+                "강호의 평화 회복",
+                "후학 양성 결정",
+                "은거 또는 천하 유랑 선택",
+                "초월 경지 도달",
+            ],
+        },
+    ],
+}
+
+
+def get_stage_for_episode(ep_number, total_eps=50):
+    """회차에서 마음 흐름 단계 반환."""
+    pct = ep_number / total_eps if total_eps > 0 else 0
+    if pct < 0.20:
+        return WUXIA_HERO_MIND_FLOW["stages"][0]
+    elif pct < 0.70:
+        return WUXIA_HERO_MIND_FLOW["stages"][1]
+    else:
+        return WUXIA_HERO_MIND_FLOW["stages"][2]
+
+
+def detect_transition_episodes(total_eps=50):
+    """단계 전환점 회차 자동 감지.
+    무협 50화 기준 → [3, 5~6, 30~31, 35] 정도가 전환 구간."""
+    s2_start = max(2, int(total_eps * 0.10))
+    s2_full = max(s2_start + 2, int(total_eps * 0.20))
+    s3_start = max(s2_full + 2, int(total_eps * 0.65))
+    s3_full = max(s3_start + 1, int(total_eps * 0.70))
+    return sorted(set([s2_start, s2_full, s3_start, s3_full]))
+
+
+def get_wuxia_mind_flow_block(ep_number, total_eps=50):
+    """현재 회차의 마음 흐름 단계 블록 생성."""
+    stage = get_stage_for_episode(ep_number, total_eps)
+    transitions = detect_transition_episodes(total_eps)
+
+    is_transition = ep_number in transitions
+    transition_note = ""
+    if is_transition:
+        transition_note = f"\n\n⚠️ **전환점 회차**: 이전 단계의 정점이자 다음 단계로의 도약점. 자가 검수 권장."
+
+    return f"""
+## 마음 흐름 단계 (EP {ep_number}/{total_eps})
+
+### {stage['stage']}단계: {stage['name']}
+{stage['description']}
+
+**전형적 회차 비중**: {stage['typical_episodes_pct']}
+
+**내면 상태 키워드**:
+{', '.join(stage['inner_state_keywords'])}
+
+**행동 키워드**:
+{', '.join(stage['behavior_keywords'])}
+
+**무협 특수**:
+{stage['wuxia_specific']}
+
+**이 단계의 핵심 장면 후보**:
+{chr(10).join(['- ' + s for s in stage['key_scenes']])}{transition_note}
+""".strip()
+
+
+# ═══════════════════════════════════════════════════
+# [v2.0 Phase A] WUXIA_VALIDATION_WEIGHTS — 자가 검수 가중치
+# 무협 조정안 (인수인계 문서 #2)
+# ═══════════════════════════════════════════════════
+
+WUXIA_VALIDATION_WEIGHTS = {
+    "MATERIAL_USAGE":         0.30,  # 동일 — 무공·문파 재료 활용
+    "CHARACTER_CONSISTENCY":  0.20,  # ↓ 약간 — 무협은 다중 인물 항상 등장
+    "CLIFFHANGER_STRENGTH":   0.15,  # 동일
+    "MISE_EN_SCENE":          0.20,  # ↑ — 무공 시전·전투 묘사 비중 큼
+    "MARKET_VIABILITY":       0.15,  # ↓ 약간
+}
+
+VALIDATION_THRESHOLDS = {
+    "episode_pass": 75,      # 회차 단독 점수 합격선
+    "episode_warn": 65,      # 경고선
+    "episode_redo": 55,      # 재집필 권장선
+    "cumulative_pass": 78,   # 누적 점수 합격선
+}
+
+
+# ═══════════════════════════════════════════════════
+# [v2.0 Phase A] WUXIA_MARKET_DATA — 무협 시장 정량 데이터
+# webnovel-engine v3.0 data_market.py의 무협 버전 (간소화)
+# ═══════════════════════════════════════════════════
+
+WUXIA_MARKET_DATA = {
+    "platform_market_share": {
+        "문피아": {
+            "share": 0.35,
+            "primary_genre": "정통무협 + 회귀물",
+            "target_age": "30-50대 남성",
+            "description": "무협 전통 강자. 정통 무협부터 회귀 먼치킨까지.",
+            "wuxia_friendly": True,
+        },
+        "카카오페이지": {
+            "share": 0.30,
+            "primary_genre": "K-웹툰무협 + 시스템무협",
+            "target_age": "20-40대 남녀",
+            "description": "웹툰 IP 확장 강세. 시스템·학원 무협 인기.",
+            "wuxia_friendly": True,
+        },
+        "네이버웹소설": {
+            "share": 0.20,
+            "primary_genre": "학원무협 + 청춘 라이트",
+            "target_age": "10-20대",
+            "description": "10대 진입 채널. 학원 무협·라이트 톤.",
+            "wuxia_friendly": True,
+        },
+        "라인웹툰": {
+            "share": 0.10,
+            "primary_genre": "글로벌 K-웹툰무협",
+            "target_age": "글로벌 10-30대",
+            "description": "영문/일본어/태국어 동시 출시. 글로벌 IP 확장.",
+            "wuxia_friendly": True,
+        },
+        "리디": {
+            "share": 0.05,
+            "primary_genre": "여성향 무협",
+            "target_age": "20-40대 여성",
+            "description": "여성향 무협(검귀물 등)의 거점.",
+            "wuxia_friendly": True,
+        },
+    },
+
+    "trend_2026": {
+        "rising": [
+            "K-웹툰 무협 (라이트 톤 + 글로벌 영문)",
+            "학원 무협 (10대 진입로)",
+            "회귀 + 시스템 하이브리드",
+            "여성향 무협 (검귀·여협)",
+        ],
+        "declining": [
+            "정통 사변무협 (분량 부담)",
+            "복잡한 한자 고유명사 남발",
+            "사자성어 의존 작품",
+        ],
+        "saturated": [
+            "단순 회귀 먼치킨 (차별화 필수)",
+            "마교 절대악 일변도",
+        ],
+    },
+
+    "market_triggers": {
+        "high": [
+            "회귀·빙의 트리거 명확 제시",
+            "1화에 강력한 훅",
+            "5화 이내 첫 사이다",
+            "주인공의 명확한 동기",
+            "강호 세계관의 빠른 압축 제시",
+        ],
+        "medium": [
+            "사부 캐릭터의 매력",
+            "여성 조연의 입체성",
+            "라이벌의 입체성",
+            "필살기의 시각적 묘사",
+        ],
+        "low": [
+            "복잡한 정치 구도",
+            "긴 회상",
+            "학술적 무공 설명",
+        ],
+    },
+}
+
+
+def get_wuxia_market_block(target_platforms=None):
+    """무협 시장 데이터 블록 생성.
+    target_platforms: 우선 플랫폼 리스트 (None이면 전체)
+    """
+    blocks = ["## 무협 시장 데이터 (2026년 기준)"]
+
+    blocks.append("\n### 플랫폼별 무협 친화도")
+    platforms = target_platforms or list(WUXIA_MARKET_DATA["platform_market_share"].keys())
+    for pname in platforms:
+        if pname not in WUXIA_MARKET_DATA["platform_market_share"]:
+            continue
+        p = WUXIA_MARKET_DATA["platform_market_share"][pname]
+        blocks.append(f"\n**{pname}** ({p['share']*100:.0f}%)")
+        blocks.append(f"- 주력 장르: {p['primary_genre']}")
+        blocks.append(f"- 타겟 연령: {p['target_age']}")
+        blocks.append(f"- 특성: {p['description']}")
+
+    blocks.append("\n### 2026 트렌드")
+    blocks.append("**상승세**: " + ", ".join(WUXIA_MARKET_DATA["trend_2026"]["rising"]))
+    blocks.append("**하락세**: " + ", ".join(WUXIA_MARKET_DATA["trend_2026"]["declining"]))
+    blocks.append("**포화**: " + ", ".join(WUXIA_MARKET_DATA["trend_2026"]["saturated"]))
+
+    blocks.append("\n### 시장 트리거")
+    blocks.append("**고효과 (필수 적용)**:")
+    for t in WUXIA_MARKET_DATA["market_triggers"]["high"]:
+        blocks.append(f"- {t}")
+    blocks.append("\n**중효과 (권장)**:")
+    for t in WUXIA_MARKET_DATA["market_triggers"]["medium"]:
+        blocks.append(f"- {t}")
+
+    return "\n".join(blocks)
+
+
+# ═══════════════════════════════════════════════════
+# [v2.0 Phase A] 작품 지향 자동 분류
+# webnovel-engine v3.0 detect_work_orientation() 무협 변주
+# ═══════════════════════════════════════════════════
+
+_WUXIA_FEMALE_HINTS = {
+    "여협", "여주인공", "낮에는여인밤에는검귀", "여성향무협", "검귀물",
+    "여주", "여검사", "여검수", "비검", "여성무협",
+}
+
+_WUXIA_NEUTRAL_HINTS = {
+    "혼성", "남녀투톱", "듀얼주인공",
+}
+
+
+def detect_wuxia_work_orientation(concept_dict):
+    """컨셉에서 작품 지향 자동 감지 (male / female / neutral)."""
+    if not isinstance(concept_dict, dict):
+        return "male"
+
+    text_blob = " ".join([
+        str(concept_dict.get("title", "")),
+        str(concept_dict.get("logline", "")),
+        str(concept_dict.get("genre", "")),
+        str(concept_dict.get("target_audience", "")),
+        str(concept_dict.get("narrative_tone", "")),
+    ]).lower().replace(" ", "")
+
+    # 명시적 women hints
+    for hint in _WUXIA_FEMALE_HINTS:
+        if hint in text_blob:
+            return "female"
+
+    for hint in _WUXIA_NEUTRAL_HINTS:
+        if hint in text_blob:
+            return "neutral"
+
+    # 주인공 성별 추론
+    protagonist = concept_dict.get("protagonist", {})
+    if isinstance(protagonist, dict):
+        gender = str(protagonist.get("gender", "")).lower()
+        if "여" in gender or "female" in gender:
+            return "female"
+
+    # 기본값: 무협은 male 우세
+    return "male"
+
+
+# ═══════════════════════════════════════════════════
+# [v2.0 Phase B] 5종 블록 빌더 + IdeaSeed 변환 빌더
+# webnovel-engine v3.0 패턴을 무협으로 변환
+# ═══════════════════════════════════════════════════
+
+
+def build_wuxia_formula_strategy_block(formula_main_key, formula_sub_key=""):
+    """공식 전략 블록 — 메인/서브 공식 결합 가이드.
+
+    Args:
+        formula_main_key: WUXIA_FORMULAS의 메인 공식 키 (예: F1_회귀_먼치킨_문파재건)
+        formula_sub_key: 서브 공식 키 (옵션)
+    """
+    if not formula_main_key or formula_main_key not in WUXIA_FORMULAS:
+        return ""
+
+    main_f = WUXIA_FORMULAS[formula_main_key]
+    blocks = ["## 무협 공식 전략 블록"]
+    blocks.append(f"\n### 메인 공식: {main_f['label']}")
+    blocks.append(f"{main_f['description']}")
+    blocks.append(f"- 레퍼런스: {', '.join(main_f.get('references', [])[:3])}")
+    blocks.append(f"- 타겟: {main_f.get('target_age', '')}")
+    blocks.append(f"- 시장 포화도: {main_f.get('saturation', '?')}/10")
+
+    keywords = main_f.get("keywords", [])
+    if keywords:
+        blocks.append(f"- 핵심 키워드: {', '.join(keywords[:5])}")
+
+    if formula_sub_key and formula_sub_key in WUXIA_FORMULAS:
+        sub_f = WUXIA_FORMULAS[formula_sub_key]
+        blocks.append(f"\n### 서브 공식: {sub_f['label']}")
+        blocks.append(f"{sub_f['description']}")
+        blocks.append(f"\n### 메인 + 서브 결합 가이드")
+        blocks.append(
+            f"- 메인 ({main_f['label']})의 골격을 유지하면서, "
+            f"서브 ({sub_f['label']})의 매력을 보강 요소로 결합."
+        )
+        blocks.append("- 메인의 카타르시스 패턴이 우선, 서브는 차별화 포인트.")
+        blocks.append("- 두 공식이 충돌할 때는 메인 공식의 톤을 유지.")
+
+    return "\n".join(blocks)
+
+
+def build_wuxia_motif_block(primary_motif="", secondary_motifs=None, tertiary_motifs=None):
+    """무협 모티프 블록 — 1차/2차/3차 계층화.
+
+    Args:
+        primary_motif: 1차 모티프 키 (NARRATIVE_MOTIFS 중)
+        secondary_motifs: 2차 모티프 키 리스트
+        tertiary_motifs: 3차 모티프 키 리스트
+    """
+    blocks = ["## 무협 모티프 블록"]
+
+    if primary_motif and primary_motif in NARRATIVE_MOTIFS:
+        m = NARRATIVE_MOTIFS[primary_motif]
+        blocks.append(f"\n### 1차 모티프: {primary_motif}")
+        blocks.append(f"{m.get('desc', '')}")
+        blocks.append(f"- 활용: {m.get('usage', '')}")
+
+    if secondary_motifs:
+        blocks.append("\n### 2차 모티프 (보조)")
+        for mk in secondary_motifs:
+            if mk in NARRATIVE_MOTIFS:
+                m = NARRATIVE_MOTIFS[mk]
+                blocks.append(f"- **{mk}**: {m.get('desc', '')}")
+
+    if tertiary_motifs:
+        blocks.append("\n### 3차 모티프 (양념)")
+        for mk in tertiary_motifs:
+            if mk in NARRATIVE_MOTIFS:
+                m = NARRATIVE_MOTIFS[mk]
+                blocks.append(f"- {mk}: {m.get('desc', '')[:50]}...")
+
+    blocks.append(
+        "\n### 모티프 활용 원칙\n"
+        "- 1차 모티프는 작품 전체를 관통하는 메인 동력\n"
+        "- 2차 모티프는 회차 단위로 변주 가능\n"
+        "- 3차 모티프는 특정 장면·서브플롯에 양념처럼 활용\n"
+        "- 모티프 남용 금지 (회차당 2~3개 모티프 활용 권장)"
+    )
+
+    return "\n".join(blocks)
+
+
+def build_wuxia_character_role_block(role_keys=None, character_bible=None):
+    """캐릭터 역할 블록 — 12종 역할 중 작품에 사용된 것들 조명.
+
+    Args:
+        role_keys: 사용할 역할 키 리스트
+        character_bible: 캐릭터 바이블 (있으면 매핑 표시)
+    """
+    if role_keys is None:
+        role_keys = []
+
+    blocks = [get_character_role_block(role_keys, compact=False)]
+
+    if character_bible and isinstance(character_bible, list):
+        blocks.append("\n### 본 작품 캐릭터-역할 매핑")
+        for char in character_bible:
+            if isinstance(char, dict):
+                name = char.get("name", char.get("이름", "?"))
+                role = char.get("narrative_role", char.get("서사적_역할", ""))
+                if role:
+                    blocks.append(f"- {name} → {role}")
+
+    return "\n".join(blocks)
+
+
+def build_wuxia_mind_flow_arc_block(concept, ep_number=0, total_eps=50):
+    """마음 흐름 + 회차 단계 매핑 블록.
+
+    Args:
+        concept: 컨셉 카드
+        ep_number: 현재 회차 (0이면 전체 안내)
+        total_eps: 총 회차 수
+    """
+    blocks = ["## 마음 흐름 단계 — 무협 남성향 3단계"]
+
+    # 전체 단계 안내
+    for stage in WUXIA_HERO_MIND_FLOW["stages"]:
+        blocks.append(f"\n### {stage['stage']}단계: {stage['name']} ({stage['typical_episodes_pct']})")
+        blocks.append(f"{stage['description']}")
+        blocks.append(f"- 무협 특수: {stage['wuxia_specific']}")
+
+    # 현재 회차 단계
+    if ep_number > 0:
+        current_stage = get_stage_for_episode(ep_number, total_eps)
+        transitions = detect_transition_episodes(total_eps)
+        is_transition = ep_number in transitions
+
+        blocks.append(f"\n---\n### 현재 회차(EP{ep_number}) 가이드")
+        blocks.append(f"\n**현재 단계: {current_stage['stage']}단계 — {current_stage['name']}**")
+        blocks.append(f"\n**필수 내면 키워드 활용**: {', '.join(current_stage['inner_state_keywords'][:4])}")
+        blocks.append(f"**필수 행동 키워드 활용**: {', '.join(current_stage['behavior_keywords'][:4])}")
+
+        if is_transition:
+            blocks.append(
+                f"\n⚠️ **이 회차는 전환점입니다 (전환 회차 목록: {transitions})**\n"
+                f"이전 단계의 정점 + 다음 단계의 도약을 동시에 보여주는 구조 권장."
+            )
+
+    return "\n".join(blocks)
+
+
+def build_wuxia_market_viability_block(target_platforms=None, work_orientation="male"):
+    """시장성 블록 — 플랫폼·트렌드·트리거 통합.
+
+    Args:
+        target_platforms: 우선 플랫폼 리스트
+        work_orientation: male / female / neutral
+    """
+    blocks = [get_wuxia_market_block(target_platforms)]
+
+    blocks.append(f"\n### 작품 지향: {work_orientation}")
+    if work_orientation == "male":
+        blocks.append("- 남성향 무협의 표준 패턴 적용")
+        blocks.append("- 사이다 카타르시스, 성장 곡선, 라이벌 격파 중심")
+        blocks.append("- 로맨스는 보조 (1~2명의 여성 조연)")
+    elif work_orientation == "female":
+        blocks.append("- 여성향 무협 (검귀물·여협물) 패턴 적용")
+        blocks.append("- 여주 시점 우세, 감정선·관계성 중심")
+        blocks.append("- 남성 캐릭터의 입체성·매력 강화")
+    else:
+        blocks.append("- 혼성 작품. 남녀 균형 잡힌 시점·분량 배분")
+
+    return "\n".join(blocks)
+
+
+# ═══════════════════════════════════════════════════
+# [v2.0 Phase B] IdeaSeed JSON → 무협 콘셉트 카드 변환 빌더
+# ═══════════════════════════════════════════════════
+
+def build_wuxia_ideaseed_to_concept_prompt(ideaseed_json_str, pending_decisions_resolved=None):
+    """IdeaSeed JSON → 무협 컨셉 카드 변환 프롬프트.
+
+    Args:
+        ideaseed_json_str: IdeaSeed JSON 전체 문자열
+        pending_decisions_resolved: 미결정 사항에 대한 작가의 결정 (dict)
+    """
+    formulas_list = list(WUXIA_FORMULAS.keys())
+    motifs_list = list(NARRATIVE_MOTIFS.keys())
+    protagonist_types_list = list(PROTAGONIST_TYPES.keys())
+
+    formulas_brief = "\n".join([
+        f"- {k}: {v.get('label', '')} — {v.get('description', '')[:60]}"
+        for k, v in WUXIA_FORMULAS.items()
+    ])
+
+    protagonist_types_brief = "\n".join([
+        f"- {k}: {v.get('label', '')} — {v.get('engine', '')}"
+        for k, v in PROTAGONIST_TYPES.items()
+    ])
+
+    motifs_brief = "\n".join([
+        f"- {k}: {v.get('desc', '')[:50]}"
+        for k, v in list(NARRATIVE_MOTIFS.items())[:15]
+    ])
+
+    decisions_block = ""
+    if pending_decisions_resolved:
+        decisions_block = "\n## 작가가 결정한 미결정 사항\n"
+        for q, a in pending_decisions_resolved.items():
+            decisions_block += f"- **{q}**: {a}\n"
+
+    return f"""당신은 BLUE JEANS WUXIA ENGINE의 컨셉 변환 전문가입니다.
+주어진 IdeaSeed JSON을 분석해 Wuxia Engine v2.0 호환 컨셉 카드 JSON을 생성하세요.
+
+## 입력 IdeaSeed JSON
+```json
+{ideaseed_json_str}
+```
+{decisions_block}
+
+## 사용 가능한 무협 공식 (6종)
+{formulas_brief}
+
+## 사용 가능한 주인공 유형 (5종)
+{protagonist_types_brief}
+
+## 주요 무협 모티프 (예시)
+{motifs_brief}
+
+## 출력 JSON 스키마
+
+다음 형식으로 컨셉 카드를 생성하세요:
+
+```json
+{{
+  "title": "작품 제목",
+  "logline": "한 문장 로그라인",
+  "genre": "주 장르",
+  "subgenres": ["보조 장르1", "보조 장르2"],
+  "wuxia_formula_main": "F1_회귀_먼치킨_문파재건 형식의 키",
+  "wuxia_formula_sub": "보조 공식 키 (없으면 빈 문자열)",
+  "protagonist_type": "회귀자 형식의 키",
+  "protagonist_subtype": "단일회귀형 / 흑화회귀형 등 세부 유형",
+  "narrative_motifs": {{
+    "primary": "주 모티프 키",
+    "secondary": ["보조 모티프1", "보조 모티프2"],
+    "tertiary": ["부가 모티프1"]
+  }},
+  "narrative_tone": "K-웹툰무협 / 정통무협 / 학원무협 등",
+  "work_orientation": "male / female / neutral",
+  "protagonist": {{
+    "name": "주인공 이름",
+    "age": "나이",
+    "gender": "성별",
+    "background": "배경",
+    "core_desire": "핵심 욕망",
+    "core_lack": "핵심 결핍",
+    "transformation_arc": "변화의 호 (1단계 → 2단계 → 3단계)"
+  }},
+  "antagonist": {{
+    "name": "적대자 이름",
+    "role": "마교주_절대악 / 숙적_복수의_대상 등 12종 역할 중",
+    "motivation": "동기"
+  }},
+  "key_supporting_chars": [
+    {{
+      "name": "조연 이름",
+      "role": "사형_검증된_라이벌 / 사매_사제_따르는_후배 등",
+      "function": "서사적 기능"
+    }}
+  ],
+  "world_setting": {{
+    "era": "시대 (예: 명말청초·가상 왕조·현대 학원 무협)",
+    "location": "주요 무대",
+    "key_factions": ["문파/세력1", "문파/세력2"],
+    "unique_rules": "독특한 세계관 규칙 (시스템·회귀·각성 등)"
+  }},
+  "core_themes": ["주제1", "주제2"],
+  "target_audience": {{
+    "primary": "주 타겟",
+    "secondary": "보조 타겟",
+    "global_potential": "글로벌 가능성"
+  }},
+  "platform_priority": ["문피아", "카카오페이지" 등],
+  "estimated_episodes": 50,
+  "rating": "전체 / 청소년 / 19금",
+  "differentiation_points": [
+    "차별화 포인트1",
+    "차별화 포인트2"
+  ],
+  "v2_classification": {{
+    "consumption_tier": ["팬", "매니아"],
+    "hook_score_estimated": 38,
+    "market_stars": {{"domestic": 4, "global": 4, "ott": 3}}
+  }}
+}}
+```
+
+## 변환 규칙
+1. IdeaSeed의 `_v3_classification_wuxia` 정보를 우선 활용
+2. `locked_seed`의 정보를 변경하지 말고 그대로 사용
+3. `pending_decisions`는 작가 결정 사항을 반영하거나 가장 합리적인 기본값 적용
+4. 빈 필드는 IdeaSeed에서 합리적으로 추론
+5. 주인공 변화의 호는 마음 흐름 3단계와 매핑
+
+## 출력 형식
+**JSON만 출력하세요. 설명·주석·마크다운 없이 순수 JSON만.**
+JSON은 반드시 유효한 형식이어야 하며, 마크다운 코드 블록(```)으로 감싸지 마세요.
+"""
+
+
+# ═══════════════════════════════════════════════════
+# [v2.0 Phase C 준비] 자가 검수 프롬프트 빌더
+# ═══════════════════════════════════════════════════
+
+def build_validation_prompt(
+    episode_text,
+    ep_number,
+    concept_dict,
+    character_bible_str,
+    rule_validation_result=None,
+    total_eps=50,
+    prev_summary="",
+):
+    """[v2.0 Phase C] 회차 자가 검수 — Sonnet이 5축 채점.
+
+    Args:
+        episode_text: 회차 본문
+        ep_number: 회차 번호
+        concept_dict: 콘셉트 카드 (dict)
+        character_bible_str: 캐릭터 바이블 (문자열)
+        rule_validation_result: 규칙 기반 사전 검수 결과 (dict, 옵션)
+        total_eps: 총 회차 수
+        prev_summary: 직전 회차 요약 (옵션)
+    """
+    formula_main = concept_dict.get("wuxia_formula_main", "")
+    formula_sub = concept_dict.get("wuxia_formula_sub", "")
+    protagonist_type = concept_dict.get("protagonist_type", "")
+    motifs = concept_dict.get("narrative_motifs", {})
+
+    formula_label = WUXIA_FORMULAS.get(formula_main, {}).get("label", formula_main)
+
+    # 현재 단계
+    stage = get_stage_for_episode(ep_number, total_eps)
+    transitions = detect_transition_episodes(total_eps)
+
+    rule_block = ""
+    if rule_validation_result:
+        used = rule_validation_result.get("used", [])
+        weak = rule_validation_result.get("weak", [])
+        missing = rule_validation_result.get("missing", [])
+        rule_block = f"""
+## 규칙 기반 사전 검수 결과 (참고용)
+- 활용된 재료: {', '.join(used) if used else '(없음)'}
+- 약하게 활용된 재료: {', '.join(weak) if weak else '(없음)'}
+- 누락된 재료: {', '.join(missing) if missing else '(없음)'}
+"""
+
+    prev_block = ""
+    if prev_summary:
+        prev_block = f"\n## 직전 회차 요약\n{prev_summary[:500]}"
+
+    return f"""당신은 한국 무협 웹소설 시장의 베테랑 편집장이자 자가 검수 전문가입니다.
+
+다음 회차를 5축으로 정밀 채점하세요. 각 축 0~100점, 가혹하게 평가.
+
+## 작품 컨셉
+- 제목: {concept_dict.get("title", "")}
+- 메인 공식: {formula_label}
+- 서브 공식: {formula_sub}
+- 주인공 유형: {protagonist_type}
+- 1차 모티프: {motifs.get("primary", "")}
+- 작품 지향: {concept_dict.get("work_orientation", "male")}
+
+## 캐릭터 바이블
+{character_bible_str[:2000]}
+
+## 현재 회차 정보
+- 회차: EP{ep_number}/{total_eps}
+- 마음 흐름 단계: {stage['stage']}단계 ({stage['name']})
+- 전환점 회차 여부: {'⚠️ 전환점' if ep_number in transitions else '일반 회차'}
+{prev_block}
+
+## 회차 본문
+{episode_text[:8000]}
+{rule_block}
+
+## 5축 채점 기준 (가중치 표시)
+
+### 1. MATERIAL_USAGE (가중치 30%) — 기획 재료 활용
+- wuxia_formula_main의 keywords·representative_motifs가 본문에 반영됐는가
+- wuxia_motifs.primary가 살아 있는가
+- 캐릭터 바이블의 인물 특성이 본문에 살아 있는가
+- 누락 재료가 있는가
+
+### 2. CHARACTER_CONSISTENCY (가중치 20%) — 인물 일관성
+- 12종 인물 역할이 평면화되지 않았는가
+- 주인공의 마음 흐름 단계({stage['stage']}단계)와 행동이 부합하는가
+- 사형·사매 같은 무협 특수 관계가 입체적인가
+
+### 3. CLIFFHANGER_STRENGTH (가중치 15%) — 회차 끝 임팩트
+- 마지막 200자가 다음 회차를 읽게 만드는가
+- 9유형 클리프행어 패턴이 적용됐는가
+- 너무 자주 같은 패턴 반복인가
+
+### 4. MISE_EN_SCENE (가중치 20%) — 장면·묘사 강도 ★ 무협 가중
+- 무공 시전 장면이 시각적으로 살아 있는가
+- 전투 묘사가 컷 분해 가능한가 (웹툰화 친화)
+- 장소·인물 배치가 명확한가
+- 한자 병기 규칙 준수 (글로벌 친화)
+
+### 5. MARKET_VIABILITY (가중치 15%) — 시장성
+- 첫 200자에 강력한 훅이 있는가
+- SNS 공유 가능한 명대사가 있는가 (3개 이상 권장)
+- 회차 분량이 플랫폼에 맞는가
+- 글로벌 영문 번역 친화도
+
+## 출력 형식
+
+```json
+{{
+  "axes": {{
+    "MATERIAL_USAGE": {{
+      "score": 75,
+      "verdict": "양호",
+      "evidence": "구체적 근거 1",
+      "issues": ["문제점 1", "문제점 2"]
+    }},
+    "CHARACTER_CONSISTENCY": {{
+      "score": 80,
+      "verdict": "우수",
+      "evidence": "...",
+      "issues": []
+    }},
+    "CLIFFHANGER_STRENGTH": {{ "score": 85, "verdict": "...", "evidence": "...", "issues": [] }},
+    "MISE_EN_SCENE": {{ "score": 70, "verdict": "...", "evidence": "...", "issues": [] }},
+    "MARKET_VIABILITY": {{ "score": 78, "verdict": "...", "evidence": "...", "issues": [] }}
+  }},
+  "weighted_overall": 76,
+  "grade": "B+",
+  "verdict": "PASS / WARN / REDO",
+  "key_strengths": ["강점 1", "강점 2"],
+  "key_weaknesses": ["약점 1", "약점 2"],
+  "concrete_fixes": [
+    "구체적 수정 제안 1",
+    "구체적 수정 제안 2"
+  ],
+  "transition_quality": "전환점 회차일 경우 전환의 자연스러움 평가, 아니면 빈 문자열"
+}}
+```
+
+**JSON만 출력하세요. 마크다운 코드 블록 없이 순수 JSON만.**
+"""
+
+
+def build_episode_redo_prompt(
+    original_episode_text,
+    ep_number,
+    validation_result,
+    concept_dict,
+    character_bible_str,
+):
+    """검수 결과 점수 미달 시 재집필 프롬프트.
+
+    Args:
+        original_episode_text: 원본 회차 본문
+        ep_number: 회차 번호
+        validation_result: 검수 결과 (dict)
+        concept_dict: 콘셉트 카드
+        character_bible_str: 캐릭터 바이블
+    """
+    weak_axes = []
+    for axis_name, axis_data in validation_result.get("axes", {}).items():
+        if isinstance(axis_data, dict) and axis_data.get("score", 100) < 70:
+            weak_axes.append({
+                "axis": axis_name,
+                "score": axis_data.get("score"),
+                "issues": axis_data.get("issues", []),
+            })
+
+    fixes = validation_result.get("concrete_fixes", [])
+    weaknesses = validation_result.get("key_weaknesses", [])
+
+    weak_axes_block = "\n".join([
+        f"- **{a['axis']}**: {a['score']}점 — 문제: {'; '.join(a['issues'])}"
+        for a in weak_axes
+    ])
+    fixes_block = "\n".join([f"- {f}" for f in fixes])
+    weaknesses_block = "\n".join([f"- {w}" for w in weaknesses])
+
+    return f"""당신은 BLUE JEANS WUXIA ENGINE의 회차 재집필 전문가입니다.
+
+다음 회차의 자가 검수 결과 점수가 미달되었습니다. **반드시 약점을 보완해서 재집필**하세요.
+
+## 원본 회차 (EP{ep_number})
+{original_episode_text}
+
+## 자가 검수 결과
+- 종합 점수: {validation_result.get("weighted_overall", "?")}점
+- 등급: {validation_result.get("grade", "?")}
+- 판정: {validation_result.get("verdict", "?")}
+
+### 약점 축 (반드시 개선)
+{weak_axes_block}
+
+### 핵심 약점
+{weaknesses_block}
+
+### 구체적 수정 제안 (반드시 반영)
+{fixes_block}
+
+## 작품 정보
+- 제목: {concept_dict.get("title", "")}
+- 공식: {concept_dict.get("wuxia_formula_main", "")}
+- 주인공: {concept_dict.get("protagonist", {}).get("name", "")}
+
+## 캐릭터 바이블 (요약)
+{character_bible_str[:1500]}
+
+## 재집필 지침
+1. **회차의 핵심 사건은 유지**하되, 약점을 보완해 재집필
+2. 분량은 원본과 비슷하게 (±10% 이내)
+3. 클리프행어 강화 (9유형 활용)
+4. 무공 시전·전투 묘사 시각적 강화
+5. 명대사 3~5개 의무 (SNS 공유 가능 수준)
+6. 한자 병기 규칙 엄수 (첫 등장만)
+7. 마음 흐름 단계({get_stage_for_episode(ep_number, 50)["name"]}) 일관성
+
+## 출력
+재집필된 회차 본문만 출력하세요. JSON·메타데이터 불필요.
+"""
