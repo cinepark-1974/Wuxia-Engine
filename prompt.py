@@ -1812,52 +1812,250 @@ FLOW_INDUCTION_RULES = """[독자 몰입 유도 규칙 — 강종현(2024) Flow 
 # ═══════════════════════════════════════════════════
 
 def build_parse_brief_prompt(brief_text):
-    """기획서 파싱 프롬프트."""
-    return f"""다음은 무협 웹소설 기획서입니다. 분석해서 JSON 형식으로 구조화하세요.
+    """기획서 텍스트를 무협 컨셉 카드 JSON으로 파싱.
 
-기획서:
----
+    [v2.0 안정화] 웹소설 엔진 v3.0 패턴 이식:
+    - 분량 보호: 12,000자 초과 시 앞부분 + 끝부분 발췌
+    - JSON 출력 강제: 마크다운 코드 블록 / 가이드 문구 혼입 방지
+    - 빈 필드 명시 규칙: 추론 불가 시 빈 문자열·빈 배열로 남김
+    """
+    # ── 분량 보호: 토큰 한도 초과 방지 ──
+    MAX_BRIEF_CHARS = 12000  # 약 15K~20K 토큰 (한국어 기준)
+    if len(brief_text) > MAX_BRIEF_CHARS:
+        head = brief_text[: MAX_BRIEF_CHARS - 2000]
+        tail = brief_text[-2000:]
+        brief_text = head + "\n\n[...중략...]\n\n" + tail
+
+    # ── 선택지 리스트를 별도 블록으로 분리 (JSON 안에 한국어 가이드 혼입 방지) ──
+    formula_keys = list(WUXIA_FORMULAS.keys())
+    protagonist_type_keys = list(PROTAGONIST_TYPES.keys())
+    motif_keys = list(NARRATIVE_MOTIFS.keys())
+    tone_preset_keys = list(NARRATIVE_TONE_PRESETS.keys())
+
+    return f"""다음은 무협 웹소설 기획서입니다. 분석해서 무협 컨셉 카드 JSON으로 변환하세요.
+
+[기획서 원문]
 {brief_text}
----
 
-다음 JSON 스키마로 반환하세요 (마크다운·설명 제외):
+[변환 지침]
+1. 기획서에 명시된 내용만 추출. 없는 내용은 빈 문자열("") 또는 빈 배열([])로 남김.
+2. 추측·창작 금지. 명시 안 된 사항은 모두 빈값으로.
+3. 6대 무협 공식 중 가장 적합한 것을 formula_key에 정확한 키 형식으로:
+   - 선택지: {formula_keys}
+4. 5종 주인공 유형 중 1개를 protagonist_type에 정확한 키 형식으로:
+   - 선택지: {protagonist_type_keys}
+5. 무협 모티프(narrative_motifs)는 다음 키 중 1~3개 배열로:
+   - 선택지: {motif_keys}
+6. 작품 톤 프리셋(tone_preset)은 다음 키 중 1개:
+   - 선택지: {tone_preset_keys}
+7. 등급(target_rating)은 "15금" 또는 "19금"만 사용.
 
+[JSON 출력 — 다음 구조를 정확히 따를 것. 마크다운·설명·주석 절대 금지]
 {{
-  "title": "작품 제목",
-  "logline": "한 줄 로그라인",
-  "genre": "무협 / 판타지 무협 / 여성향 무협 등",
-  "formula_key": "F1_회귀_먼치킨_문파재건 등 (6대 공식 중 추정)",
-  "protagonist_type": "정통_주인공 / 회귀자 / 전생자_이세계 / 빙의자 / 시스템_보유자",
+  "title": "",
+  "logline": "",
+  "genre": "",
+  "formula_key": "",
+  "protagonist_type": "",
   "protagonist": {{
-    "name": "이름",
-    "age": "나이",
-    "faction": "소속 (구파일방 / 세가 / 사파 / 낭인 등)",
-    "profession": "직업 (18개 중)",
-    "cultivation_stage": "현재 경지",
-    "desire": "욕망",
-    "lack": "결핍",
-    "backstory": "배경 요약"
+    "name": "",
+    "age": "",
+    "faction": "",
+    "profession": "",
+    "cultivation_stage": "",
+    "desire": "",
+    "lack": "",
+    "backstory": ""
   }},
-  "female_lead": {{ 
-    "name": "", "age": "", "faction": "", "profession": "", 
-    "cultivation_stage": "", "relation_to_protagonist": "" 
+  "female_lead": {{
+    "name": "",
+    "age": "",
+    "faction": "",
+    "profession": "",
+    "cultivation_stage": "",
+    "relation_to_protagonist": ""
   }},
-  "male_lead": {{ "name": "", "age": "", "faction": "", "relation_to_protagonist": "" }},
-  "villain": {{ "name": "", "faction": "", "motive": "" }},
-  "mentor": {{ "name": "", "faction": "" }},
+  "male_lead": {{
+    "name": "",
+    "age": "",
+    "faction": "",
+    "relation_to_protagonist": ""
+  }},
+  "villain": {{
+    "name": "",
+    "faction": "",
+    "motive": ""
+  }},
+  "mentor": {{
+    "name": "",
+    "faction": ""
+  }},
   "setting": {{
-    "era": "명말청초 / 송대 / 가상 왕조 등",
-    "location": "주요 지리",
-    "worldbuilding_notes": "특이 사항"
+    "era": "",
+    "location": "",
+    "worldbuilding_notes": ""
   }},
-  "narrative_motifs": ["혈수", "기연", "의형제" 등에서 선택],
-  "target_platform": "문피아 / 카카오페이지 / 네이버웹소설 등",
-  "target_rating": "15금 / 19금",
-  "tone_preset": "회귀_먼치킨_문파재건 / 이세계_전생_무협 등 6개 중",
-  "core_concept_notes": "기획서의 핵심 아이디어·차별화 포인트"
+  "narrative_motifs": [],
+  "target_platform": "",
+  "target_rating": "",
+  "tone_preset": "",
+  "core_concept_notes": ""
 }}
 
-JSON만 반환하세요. 설명·마크다운 없이."""
+[중요 규칙]
+- 위 JSON 객체만 출력하세요. 마크다운 코드 블록(```json ... ```) 없이.
+- 설명·주석·"등에서 선택" 같은 가이드 문구를 출력값에 포함하지 마세요.
+- 빈값은 "" 혹은 [] 사용. null 사용 금지.
+- 한국어 키 이름은 위 스키마와 정확히 동일하게 유지."""
+
+
+def build_brief_to_seed_prompt(brief_text, episode_structure=None):
+    """[v2.0 신규 — 웹소설 엔진 v3.0 패턴 이식]
+    기획서를 IdeaSeed JSON으로 직접 변환 (분량 큰 기획서·완성형 기획서용).
+
+    build_parse_brief_prompt가 간단한 컨셉 카드를 생성하는 반면,
+    이 함수는 wuxia-engine의 IdeaSeed JSON 탭에 그대로 업로드 가능한 형식으로 변환.
+
+    회차 구조가 별도 추출됐으면 episode_structure 매개변수로 전달.
+    """
+    MAX_BRIEF_CHARS = 12000
+    if len(brief_text) > MAX_BRIEF_CHARS:
+        head = brief_text[: MAX_BRIEF_CHARS - 2000]
+        tail = brief_text[-2000:]
+        brief_text = head + "\n\n[...중략...]\n\n" + tail
+
+    formula_keys = list(WUXIA_FORMULAS.keys())
+    protagonist_type_keys = list(PROTAGONIST_TYPES.keys())
+    motif_keys = list(NARRATIVE_MOTIFS.keys())
+
+    ep_block = ""
+    if episode_structure:
+        ep_block = f"\n[회차 구조 — 별도 추출됨]\n{episode_structure}\n"
+
+    return f"""당신은 BLUE JEANS WUXIA ENGINE의 기획서 → IdeaSeed JSON 변환 전문가입니다.
+주어진 무협 웹소설 기획서를 wuxia-engine v2.0 호환 IdeaSeed JSON으로 변환하세요.
+
+[기획서 원문]
+{brief_text}
+{ep_block}
+
+[사용 가능한 분류]
+- 무협 공식 (6종): {formula_keys}
+- 주인공 유형 (5종): {protagonist_type_keys}
+- 모티프 (17종): {motif_keys}
+
+[JSON 출력 스키마 — 정확히 이 구조로]
+{{
+  "_idea_engine_meta": {{
+    "version": "v1.0",
+    "generated_at": "ISO 8601 시각",
+    "project_id": "영문대문자_S1 형식",
+    "verdict": "GO|CONDITIONAL|NOGO",
+    "hook_score": 0,
+    "source": "BLUE JEANS Wuxia Brief → IdeaSeed (자동 변환)"
+  }},
+  "title": "",
+  "raw_idea": "한 단락(300~600자) 핵심 시놉시스",
+  "genre": "",
+  "target_market": "",
+  "format": "웹소설 → 웹툰 → 영상물 형식",
+  "locked_seed": {{
+    "project_id": "",
+    "title_kr": "",
+    "title_en": "",
+    "locked_logline": "한 문장(80자 이내)",
+    "locked_genre": {{"primary": "", "secondary": "", "tertiary": ""}},
+    "locked_format": {{"primary": "", "episode_count": "", "runtime": "", "ip_strategy": ""}},
+    "locked_target": {{"domestic": "", "global": ""}},
+    "locked_theme": {{"surface": "", "deep": ""}},
+    "locked_references": [],
+    "locked_hook_score": 0,
+    "locked_market_stars": {{"domestic": 0, "global": 0, "ott": 0}},
+    "locked_distribution_priority": "",
+    "locked_risks_to_address": []
+  }},
+  "executive_summary": "5문장 이내 임원 브리핑",
+  "pending_decisions": [],
+  "_v3_classification_wuxia": {{
+    "comment": "Wuxia Engine v2.0 호환 분류",
+    "wuxia_formula_main": "",
+    "wuxia_formula_sub": "",
+    "protagonist_type": "",
+    "protagonist_subtype": "",
+    "wuxia_motifs": {{"primary": "", "secondary": [], "tertiary": []}},
+    "movement_code": "",
+    "target_consumption_tier": [],
+    "target_persona": "",
+    "work_orientation": "male",
+    "narrative_tone": "",
+    "platform_priority": []
+  }}
+}}
+
+[변환 규칙]
+1. locked_seed의 모든 필드를 채우세요. 추론 불가 시 빈 문자열/빈 배열.
+2. _v3_classification_wuxia의 wuxia_formula_main, protagonist_type은 위 키 형식 정확히 일치.
+3. hook_score 0~50 사이 정수. 35+ → GO, 25~34 → CONDITIONAL, 24- → NOGO.
+4. 작품 지향(work_orientation)은 무협이면 보통 "male", 검귀물·여협물이면 "female".
+5. pending_decisions에 작가 결정 필요 사항을 명확한 질문 형태로.
+
+[중요]
+JSON 객체만 출력. 마크다운 코드 블록·설명·주석 절대 금지."""
+
+
+def build_brief_episode_extraction_prompt(brief_text, episode_structure_hint=""):
+    """[v2.0 신규 — 웹소설 엔진 v3.0 패턴 이식]
+    기획서 안에 회차별 시놉시스가 있으면 추출.
+
+    이 빌더는 build_brief_to_seed_prompt와 별도로 호출되며,
+    회차 구조가 명시된 기획서(예: 아미고 ACT I 1~10화)에서 회차별 정보 추출.
+    """
+    MAX_BRIEF_CHARS = 12000
+    if len(brief_text) > MAX_BRIEF_CHARS:
+        head = brief_text[: MAX_BRIEF_CHARS - 2000]
+        tail = brief_text[-2000:]
+        brief_text = head + "\n\n[...중략...]\n\n" + tail
+
+    hint_block = ""
+    if episode_structure_hint:
+        hint_block = f"\n[힌트] 다음과 같은 회차 구조가 있는 것으로 보입니다:\n{episode_structure_hint}\n"
+
+    return f"""다음 무협 기획서에서 회차별 시놉시스를 추출하세요.
+
+[기획서 원문]
+{brief_text}
+{hint_block}
+
+[추출 지침]
+1. ACT I/II/III 같은 막 구조나 회차별 시놉시스가 있으면 추출.
+2. 없으면 빈 배열 [] 반환.
+3. 회차 번호가 명시된 경우만 추출 (추측·창작 금지).
+
+[JSON 출력]
+{{
+  "has_episode_structure": true,
+  "total_episodes_estimated": 50,
+  "act_structure": [
+    {{"act": 1, "episodes": "1~10", "title": "", "summary": ""}},
+    {{"act": 2, "episodes": "11~30", "title": "", "summary": ""}},
+    {{"act": 3, "episodes": "31~50", "title": "", "summary": ""}}
+  ],
+  "episodes": [
+    {{"ep_number": 1, "title": "", "synopsis": ""}},
+    {{"ep_number": 2, "title": "", "synopsis": ""}}
+  ]
+}}
+
+만약 회차 구조가 없으면:
+{{
+  "has_episode_structure": false,
+  "total_episodes_estimated": 0,
+  "act_structure": [],
+  "episodes": []
+}}
+
+[중요]
+JSON만 출력. 마크다운·설명 없이."""
 
 
 def build_generate_concept_prompt(idea_text, genre=""):
