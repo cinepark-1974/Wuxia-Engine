@@ -1,7 +1,16 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v1.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.1.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
+
+[변경 이력]
+v2.1.0 (2026-05-19) — Quality Pack
+  · prompt.py에서 ENGINE_VERSION / ENGINE_BUILD_DATE 상수 import
+  · ROMANCE_FORMULAS / get_romance_formula_block import 추가
+  · 사이드바 Engine Info 표시를 동적 버전으로 전환
+
+v2.0 (2026-05) — Quality Validator + IdeaSeed System
+v1.0 (2026-XX) — 초기 무협 엔진
 """
 import streamlit as st
 import anthropic
@@ -11,6 +20,8 @@ from datetime import datetime
 
 from prompt import (
     SYSTEM_PROMPT,
+    ENGINE_VERSION,                        # v2.1.0 신규
+    ENGINE_BUILD_DATE,                     # v2.1.0 신규
     build_system_prompt,
     build_parse_brief_prompt,
     build_brief_to_seed_prompt,           # v2.0 신규
@@ -54,6 +65,9 @@ from prompt import (
     build_wuxia_ideaseed_to_concept_prompt,
     build_validation_prompt,
     build_episode_redo_prompt,
+    # v2.1.0 신규
+    ROMANCE_FORMULAS,
+    get_romance_formula_block,
 )
 from profession_pack import (
     PROFESSION_PACK,
@@ -1533,8 +1547,8 @@ with tab3:
 # ══════════════════════════════════════════════
 with st.sidebar:
     st.markdown("### 👖 WUXIA ENGINE")
-    st.markdown('<span class="version-badge">v2.0</span>', unsafe_allow_html=True)
-    st.markdown("**Build:** 2026-04-29")
+    st.markdown(f'<span class="version-badge">{ENGINE_VERSION}</span>', unsafe_allow_html=True)
+    st.markdown(f"**Build:** {ENGINE_BUILD_DATE}")
     st.markdown("---")
 
     st.markdown("#### 📊 작업 현황")

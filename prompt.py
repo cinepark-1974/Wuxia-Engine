@@ -1,9 +1,41 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v1.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.1.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
+
+[변경 이력]
+v2.1.0 (2026-05-19) — Quality Pack
+  · A21 1차/2차 위기 구조 룰 신설 (메인플롯 50~65% + 서브플롯 75~85%)
+  · A22 첫 장면 9유형 룰 신설 (사건발생형·의문유발형·행동형 등 9유형)
+  · WUXIA_CHARACTER_ROLES 12종에 학술 원형 매핑 추가
+    (propp_archetype: 프롭 7원형 / vogler_archetype: 보글러 8원형)
+  · ROMANCE_FORMULAS 신규 사전 추가 (버디러브 5단계 + Save The Cat! 기반)
+    F4 학원무협·F5 여성향 검귀물 공용
+  · ENGINE_VERSION / ENGINE_BUILD_DATE 상수 신설
+  · 헤더 docstring 변경 이력 누적 형식 도입
+
+v2.0 (2026-05) — Quality Validator + IdeaSeed System
+  · 5축 자가 검수 시스템 (engine_validator.py)
+  · IdeaSeed JSON 입력 시스템 (STEP 1 4번째 탭)
+  · 12종 무협 인물 역할 (WUXIA_CHARACTER_ROLES)
+  · 5종 주인공 유형 + 24 subtype (PROTAGONIST_TYPES)
+  · 마음 흐름 3단계 + 전환점 자동 감지 (WUXIA_HERO_MIND_FLOW)
+  · 25화 누적 대시보드 / 자동 재집필 (REDO 등급)
+  · safe_json 3단계 폴백 / MAX_BRIEF_CHARS=12000 분량 보호
+
+v1.0 (2026-XX) — 초기 무협 엔진
+  · 6대 무협 공식 (F1~F6)
+  · 17 모티프 / 5 톤 프리셋 / 5 독자 페르소나
+  · A1~A20 AI 문체 탈출 규칙
 """
+
+# ═══════════════════════════════════════════════════
+# Engine Metadata
+# ═══════════════════════════════════════════════════
+
+ENGINE_VERSION = "v2.1.0"
+ENGINE_BUILD_DATE = "2026-05-19"
 
 # ═══════════════════════════════════════════════════
 # SYSTEM PROMPT — 무협 웹소설 작가 페르소나
@@ -1495,10 +1527,11 @@ RATING_CONVERSION_RULES = """[19금 → 15금 변환 규칙 — 무협 특화]
 
 
 # ═══════════════════════════════════════════════════
-# AI 문체 탈출 규칙 A1~A20 (무협 특화)
+# AI 문체 탈출 규칙 A1~A22 (무협 특화)
+# v2.1.0: A21 1차/2차 위기 구조 + A22 첫 장면 9유형 추가
 # ═══════════════════════════════════════════════════
 
-AI_ANTI_PATTERN = """[AI 문체 탈출 규칙 — 무협 A1~A20]
+AI_ANTI_PATTERN = """[AI 문체 탈출 규칙 — 무협 A1~A22]
 
 ## 범용 규칙 (A1~A14)
 A1. "모든"·"마침내"·"절대로" 남발 금지
@@ -1523,6 +1556,34 @@ A17. 고어체 (재하·소생·본좌) 무의식 사용 금지
 A18. 무공 이름을 영문 의역 금지 ("Sky Sword"가 아니라 "천검")
 A19. 경지를 숫자로만 표현 금지 (시스템 무협 아닌 이상)
 A20. "강호의 이치가 그러하다"류 작가 개입 최소화
+
+## 서사 구조 룰 (A21~A22) ⭐⭐ — v2.1.0 신규
+
+A21. 1차/2차 위기 구조 (50% 이후 회차에서 의무)
+  무협 후반부 긴장 곡선은 반드시 두 층으로:
+  - 1차 위기 (메인플롯, 50~65% 지점, 50화 기준 EP25~32):
+    · 사형 갈등·무공 봉인·일시적 좌절 같은 감정 차원
+    · 해소: 본인의 자각 → 한 단계 깊은 결의
+  - 2차 위기 (서브플롯, 75~85% 지점, 50화 기준 EP37~42):
+    · 정사대전·마교 본격 등장·사문 멸문 같은 세계 규모
+    · 핵심 질문: "모든 것을 잃어도 이 길을 갈 것이냐?"
+    · 해소: 모든 것을 걸고 결단 → 진정한 무도(武道) 완성
+  주의: 1차 없이 2차로 가면 감정 빌드 약화. 2차 없으면 후반 추진력 부족.
+
+A22. 첫 장면 9유형 (EP1·EP2에서 의무 선택)
+  도입부는 다음 9유형 중 반드시 하나에 속한다.
+  [독자를 마중하는 유형 — 정통계열에 적합]
+    · 인물제시형: 주인공 캐릭터를 먼저 보여줌 (F4 학원무협 권장)
+    · 일상제시형: 평화로운 일상 → 균열 (F6 정통강호 권장)
+    · 배경제시형: 강호 풍경 → 사건 (F6 정통강호 권장)
+    · 회상형: 과거 회상으로 시작 (F1 회귀·F2 이세계 권장)
+    · 전체압축형: 핵심 갈등 압축 제시 (모든 공식)
+  [독자를 유혹하는 유형 — 판타지계열에 적합]
+    · 사건발생형: 결정적 사건이 먼저 터짐 (F1 회귀 권장 — 회귀 순간)
+    · 행동형: 특이 행동·습관으로 시작 (F4 학원무협 권장)
+    · 대비상징형: 강자/약자 대비 (F5 여성향 권장)
+    · 의문유발형: 미스터리 던지기 (F3 시스템·F2 이세계 권장)
+  주의: 9유형 중 하나에 속하지 않는 모호한 도입부는 흡인력 부족.
 """
 
 
@@ -2499,7 +2560,7 @@ def build_quality_check_prompt(episode_text, episode_number, characters, concept
 4. 고어체 오남용 (재하·소생·본좌 등)
 5. 한자 병기 규칙 (첫 등장만)
 6. 사자성어 남발
-7. AI 문체 흔적 (A1~A20)
+7. AI 문체 흔적 (A1~A22)
 
 ### C. 서사
 8. 오프닝 훅 (첫 3줄)
@@ -2586,6 +2647,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "초기 인도자, 후반엔 보조 혹은 영적 지주",
         "subtypes": ["은거고수형", "엄격무비형", "방랑선사형", "정체은폐형"],
         "wuxia_specific": "사부의 죽음·실종은 주인공의 가장 강력한 동기 부여 장치",
+        "propp_archetype": "마법을 부리는 조력자",
+        "vogler_archetype": "멘토",
     },
     "사형_검증된_라이벌": {
         "label": "사형 / 검증된 라이벌",
@@ -2594,6 +2657,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "성장 게이지, 협력자 또는 적대자로 분기",
         "subtypes": ["선의경쟁형", "질투_적대형", "타락_배신형", "충성_조력형"],
         "wuxia_specific": "사형의 흑화·배신은 중반 반전의 표준 패턴",
+        "propp_archetype": "동맹군 또는 배신자 (양면)",
+        "vogler_archetype": "동맹군 / 변신자재자",
     },
     "사매_사제_따르는_후배": {
         "label": "사매 / 사제 / 따르는 후배",
@@ -2602,6 +2667,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "주인공 성장의 증인, 인간미 부여, 로맨스 후보",
         "subtypes": ["순수_따름형", "로맨스_후보형", "재능_각성형", "비밀_보유형"],
         "wuxia_specific": "사매의 위기는 주인공의 각성 트리거로 자주 활용",
+        "propp_archetype": "공주 / 공주의 아버지 (목표 대상)",
+        "vogler_archetype": "동맹군",
     },
     "숙적_복수의_대상": {
         "label": "숙적 / 복수의 대상",
@@ -2610,6 +2677,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "복수 동력의 핵심, 최종 보스 혹은 시즌 빌런",
         "subtypes": ["전생_원수형", "가문_원수형", "사문_배신형", "맹주_타락형"],
         "wuxia_specific": "숙적은 주인공보다 강하게 시작해 점진적으로 추월당해야 카타르시스 극대화",
+        "propp_archetype": "악당",
+        "vogler_archetype": "그림자 / 먹구름",
     },
     "정파_원로_가르침": {
         "label": "정파 원로 / 가르침의 어른",
@@ -2618,6 +2687,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "정파 입성 게이트, 권위의 인정",
         "subtypes": ["권위_인정형", "시험_부여형", "비전_전수형", "은퇴_조언형"],
         "wuxia_specific": "원로의 인정은 강호 진입의 통과의례",
+        "propp_archetype": "마법을 부리는 조력자",
+        "vogler_archetype": "멘토",
     },
     "사파_타락한_조력자": {
         "label": "사파 타락한 조력자",
@@ -2626,6 +2697,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "도덕적 회색지대 제공, 비주류 자원·정보",
         "subtypes": ["은퇴_낭인형", "정보상형", "흑도_의리형", "마교_탈주형"],
         "wuxia_specific": "사파 조력자와의 관계는 정파 동료들과의 갈등 트리거",
+        "propp_archetype": "가짜 영웅 또는 기부자",
+        "vogler_archetype": "변신자재자",
     },
     "은인_생명의_빚": {
         "label": "은인 / 생명의 빚",
@@ -2634,6 +2707,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "도덕적 부채로 서사 굴림, 후반 보은 회수",
         "subtypes": ["기연_제공형", "구명_은인형", "스승_은인형", "유언_위탁형"],
         "wuxia_specific": "은인의 유언은 주인공의 장기 미션을 결정",
+        "propp_archetype": "기부자",
+        "vogler_archetype": "동맹군",
     },
     "동문_의형제": {
         "label": "동문 / 의형제",
@@ -2642,6 +2717,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "동맹의 핵심, 배신 가능성도",
         "subtypes": ["충성_의형제형", "배신_의형제형", "이상_동지형", "라이벌_의형제형"],
         "wuxia_specific": "의형제의 죽음은 주인공의 광폭 모드 트리거",
+        "propp_archetype": "영웅의 동맹",
+        "vogler_archetype": "동맹군",
     },
     "배신자_표면적_동맹": {
         "label": "배신자 / 표면적 동맹",
@@ -2650,6 +2727,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "중반 반전, 신뢰 관계의 파괴",
         "subtypes": ["사문_첩자형", "이중첩자형", "타락_배신형", "사상_배신형"],
         "wuxia_specific": "배신자의 정체는 12-18화에서 폭로되는 것이 표준",
+        "propp_archetype": "가짜 영웅",
+        "vogler_archetype": "변신자재자",
     },
     "무림맹주_세계_권력자": {
         "label": "무림맹주 / 세계 권력자",
@@ -2658,6 +2737,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "최상위 정치 게이트",
         "subtypes": ["정의로운_맹주형", "타락한_맹주형", "은퇴_권력자형", "야망_권력자형"],
         "wuxia_specific": "맹주가 적이 되는 경우 강호 전체가 주인공의 적이 됨",
+        "propp_archetype": "전령 또는 관문수호자",
+        "vogler_archetype": "관문수호자",
     },
     "마교주_절대악": {
         "label": "마교주 / 절대악",
@@ -2666,6 +2747,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "최종 보스 또는 시즌 후반 빌런",
         "subtypes": ["광기형", "신념형", "비극형", "초월형"],
         "wuxia_specific": "마교주는 단순 악이 아니라 강호와 다른 가치관을 가진 존재로 묘사해야 입체적",
+        "propp_archetype": "악당",
+        "vogler_archetype": "그림자 / 먹구름",
     },
     "천외천_초월자": {
         "label": "천외천 / 초월자",
@@ -2674,6 +2757,8 @@ WUXIA_CHARACTER_ROLES = {
         "function": "치트 아이템 또는 깨달음 제공",
         "subtypes": ["은거선인형", "잊혀진_창시자형", "이공간_존재형", "고대_유산형"],
         "wuxia_specific": "천외천의 등장은 후반부 파워업의 마지막 카드",
+        "propp_archetype": "마법을 부리는 조력자 (초월적)",
+        "vogler_archetype": "멘토 (초월적)",
     },
 }
 
@@ -2700,6 +2785,111 @@ def get_character_role_block(role_keys=None, compact=False):
             if role.get("subtypes"):
                 blocks.append(f"- 세부 유형: {', '.join(role['subtypes'])}")
             blocks.append(f"- 무협 특수 활용: {role['wuxia_specific']}")
+            # v2.1.0: 학술 원형 매핑 (캐릭터 분배 검증용)
+            if role.get("propp_archetype") or role.get("vogler_archetype"):
+                propp = role.get("propp_archetype", "-")
+                vogler = role.get("vogler_archetype", "-")
+                blocks.append(f"- 학술 원형: 프롭 7원형 = {propp} / 보글러 8원형 = {vogler}")
+    return "\n".join(blocks)
+
+
+# ═══════════════════════════════════════════════════
+# [v2.1.0] ROMANCE_FORMULAS — 무협 로맨스 곡선 포뮬러
+# F4 학원무협 메인 로맨스, F5 여성향 검귀물 공용
+# 근거: Blake Snyder Save The Cat! 버디러브 5단계
+# ═══════════════════════════════════════════════════
+
+ROMANCE_FORMULAS = {
+    "buddy_love_5_stages": {
+        "label": "버디러브 5단계 (Save The Cat! 기반)",
+        "applicable_formulas": ["F4_학원_무협", "F5_여성향_검귀_여협물"],
+        "description": "라이벌·동료 관계에서 로맨스로 발전하는 5단계 곡선. 청춘 무협 메인 로맨스 시장 표준.",
+        "stages": [
+            {
+                "stage": 1,
+                "name": "초기 반목",
+                "summary": "처음에는 서로 싫어한다",
+                "wuxia_application": (
+                    "동문 라이벌·정사 진영 차이·문파 격차로 인한 첫 충돌. "
+                    "주인공이 상대의 약점을 건드리거나, 상대가 주인공을 무시. "
+                    "관계의 표면 갈등이 명확히 그려져야 함."
+                ),
+                "ep_range_50ch": "EP1~EP8",
+            },
+            {
+                "stage": 2,
+                "name": "동행과 의존 인식",
+                "summary": "모험을 함께 해나가며 서로를 필요로 한다는 걸 깨닫는다",
+                "wuxia_application": (
+                    "비무·시험·임무에서 강제로 짝이 되어 협력. "
+                    "각자의 약점이 드러나고 서로의 강점이 보완재가 됨을 인지. "
+                    "감정선의 첫 균열은 아직 인정 거부."
+                ),
+                "ep_range_50ch": "EP9~EP18",
+            },
+            {
+                "stage": 3,
+                "name": "더 큰 갈등으로의 발전",
+                "summary": "깨달음이 더 큰 갈등으로 이어진다 (의존 거부)",
+                "wuxia_application": (
+                    "감정을 인정하면 자신의 무도(武道)에 방해된다고 판단. "
+                    "혹은 사문·가문의 명령으로 거리를 두려 함. "
+                    "1차 위기 시점과 겹치면 시너지."
+                ),
+                "ep_range_50ch": "EP19~EP30",
+            },
+            {
+                "stage": 4,
+                "name": "결별과 절망",
+                "summary": "절망의 순간 — 두 인물이 싸우고 헤어진다",
+                "wuxia_application": (
+                    "결정적 충돌·오해·이별. 한 쪽이 위험에 빠지거나 다른 진영에 흡수. "
+                    "주인공의 후회와 자존심이 충돌. "
+                    "2차 위기 직전·중에 배치하면 감정 빌드 극대화."
+                ),
+                "ep_range_50ch": "EP31~EP40",
+            },
+            {
+                "stage": 5,
+                "name": "재결합과 인정",
+                "summary": "서로를 필요로 한다는 사실을 깨닫고 자존심을 숙여 재결합",
+                "wuxia_application": (
+                    "주인공이 진심으로 자존심을 숙이거나, 상대가 결정적 순간에 돌아옴. "
+                    "재결합이 단순 화해가 아니라 함께 절대악과 맞서는 결단이어야 카타르시스. "
+                    "2차 위기 해결의 핵심 동력."
+                ),
+                "ep_range_50ch": "EP41~EP50",
+            },
+        ],
+        "common_pitfalls": [
+            "단계 2와 3 사이를 너무 빨리 건너뛰면 감정 빌드가 약화",
+            "단계 4의 절망이 충분히 깊지 않으면 단계 5의 카타르시스가 약화",
+            "라이벌 관계 → 로맨스 전환의 결정적 사건(EP20~25 부근)이 명확해야 함",
+        ],
+    },
+}
+
+
+def get_romance_formula_block(formula_key="buddy_love_5_stages"):
+    """ROMANCE_FORMULAS 블록 생성. F4·F5 작품의 캐릭터 바이블·플롯 설계 시 주입."""
+    if formula_key not in ROMANCE_FORMULAS:
+        return ""
+
+    formula = ROMANCE_FORMULAS[formula_key]
+    blocks = [f"## {formula['label']}"]
+    blocks.append(f"적용 공식: {', '.join(formula['applicable_formulas'])}")
+    blocks.append(f"\n{formula['description']}\n")
+
+    for stg in formula["stages"]:
+        blocks.append(f"\n### {stg['stage']}단계 — {stg['name']} ({stg['ep_range_50ch']})")
+        blocks.append(f"**핵심**: {stg['summary']}")
+        blocks.append(f"**무협 적용**: {stg['wuxia_application']}")
+
+    if formula.get("common_pitfalls"):
+        blocks.append("\n### 흔한 함정")
+        for pf in formula["common_pitfalls"]:
+            blocks.append(f"- {pf}")
+
     return "\n".join(blocks)
 
 
