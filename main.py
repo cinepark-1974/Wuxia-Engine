@@ -1,9 +1,19 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.1.4 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.1.5 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.1.5 (2026-07-21) — Motif Schema Unification
+  · build_core_arc_prompt의 narrative_motifs 딕셔너리 인덱싱
+    (motifs[0])으로 인한 KeyError: 0 수정
+  · build_validation_prompt의 motifs.get("primary") (배열 시
+    실패)도 함께 정규화 — 두 함수가 서로 반대 자료형을 가정하던
+    구조적 불일치 해소
+  · prompt.py에 normalize_motif_list() 헬퍼 추가
+    (main.py _normalize_motifs와 동일 로직, 프롬프트 계층용)
+  · STEP 2 진단 라인 제거 (복원·카드 인식 정상 확인됨)
+
 v2.1.4 (2026-07-21) — Restore Stability + Diagnostic
   · 프로젝트 불러오기가 rerun마다 반복 복원되던 문제 수정
     — 파일 식별자(_restored_file_sig)로 1회만 복원하도록 가드
@@ -1012,13 +1022,6 @@ with tab2:
 
     if not st.session_state.concept_card:
         st.warning("먼저 STEP 1에서 컨셉 카드를 생성해주세요.")
-        # 진단용: concept_card의 실제 상태 표시 (원인 확인 후 제거 예정)
-        _cc_state = st.session_state.get("concept_card")
-        st.caption(
-            f"[진단] concept_card 타입: {type(_cc_state).__name__} / "
-            f"값 있음: {bool(_cc_state)} / "
-            f"키 개수: {len(_cc_state) if isinstance(_cc_state, dict) else 'N/A'}"
-        )
     else:
         build_tab1, build_tab2, build_tab3, build_tab4 = st.tabs([
             "Core Arc (50화)",

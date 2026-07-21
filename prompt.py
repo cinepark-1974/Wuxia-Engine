@@ -34,7 +34,7 @@ v1.0 (2026-XX) — 초기 무협 엔진
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.1.4"
+ENGINE_VERSION = "v2.1.5"
 ENGINE_BUILD_DATE = "2026-07-21"
 
 # ═══════════════════════════════════════════════════
@@ -2187,6 +2187,39 @@ def build_augment_concept_prompt(concept_card_json):
 JSON만 반환."""
 
 
+def normalize_motif_list(motifs):
+    """
+    narrative_motifs를 문자열 리스트로 정규화한다.
+
+    경로별로 자료형이 다르다:
+      - 아이디어·직접입력 경로 → 배열  ["A", "B", "C"]
+      - IdeaSeed 변환 경로     → 딕셔너리 {"primary": "A",
+                                          "secondary": ["B"],
+                                          "tertiary": ["C"]}
+    배열/딕셔너리/문자열/None을 모두 안전하게 리스트로 통일한다.
+    (main.py의 _normalize_motifs와 동일 로직 — 프롬프트 계층에도 필요)
+    """
+    if not motifs:
+        return []
+    if isinstance(motifs, list):
+        return [str(m) for m in motifs if m]
+    if isinstance(motifs, dict):
+        result = []
+        primary = motifs.get("primary")
+        if primary:
+            result.append(str(primary))
+        for tier in ("secondary", "tertiary"):
+            val = motifs.get(tier)
+            if isinstance(val, list):
+                result.extend(str(v) for v in val if v)
+            elif val:
+                result.append(str(val))
+        return result
+    if isinstance(motifs, str):
+        return [motifs]
+    return []
+
+
 def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
                           style_dna="", style_strength="중"):
     """Core Arc 50화 생성."""
@@ -2197,7 +2230,7 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
     formula_block = get_formula_block(formula_key) if formula_key else ""
     ptype_block = get_protagonist_type_block(protagonist_type_key)
     tone_block = get_narrative_tone_block(tone_preset)
-    motifs = concept_card.get("narrative_motifs", [])
+    motifs = normalize_motif_list(concept_card.get("narrative_motifs"))
     motif_block = ""
     if motifs:
         primary = motifs[0] if len(motifs) >= 1 else ""
@@ -3534,7 +3567,7 @@ def build_validation_prompt(
     formula_main = concept_dict.get("wuxia_formula_main", "")
     formula_sub = concept_dict.get("wuxia_formula_sub", "")
     protagonist_type = concept_dict.get("protagonist_type", "")
-    motifs = concept_dict.get("narrative_motifs", {})
+    motifs = normalize_motif_list(concept_dict.get("narrative_motifs"))
 
     formula_label = WUXIA_FORMULAS.get(formula_main, {}).get("label", formula_main)
 
@@ -3567,7 +3600,7 @@ def build_validation_prompt(
 - 메인 공식: {formula_label}
 - 서브 공식: {formula_sub}
 - 주인공 유형: {protagonist_type}
-- 1차 모티프: {motifs.get("primary", "")}
+- 1차 모티프: {motifs[0] if motifs else ""}
 - 작품 지향: {concept_dict.get("work_orientation", "male")}
 
 ## 캐릭터 바이블
