@@ -1,9 +1,20 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.1.2 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.1.3 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.1.3 (2026-07-21) — Concept UX + Schema Fallback
+  · 컨셉 카드 하단에 다음 단계(STEP 2) 진행 안내 추가
+    — 자동 보강 후 화면이 초기 탭으로 돌아가 "막힌 것처럼"
+       보이던 혼란 해소
+  · 빈 필수 값(공식·타깃 플랫폼·등급) 자동 점검 및 안내 표시
+  · 공식/플랫폼/등급 표시를 경로별 키명 폴백으로 처리
+    (IdeaSeed 변환 경로는 wuxia_formula_main,
+     아이디어 경로는 formula_key — 키명 불일치로 공란이던 문제)
+  · 자동 보강 실패 시 기존 카드 보존 + 명시적 에러 알림
+    (기존: 실패 시 카드가 None으로 소실될 수 있었음)
+
 v2.1.2 (2026-07-21) — Hotfix
   · 컨셉 카드가 리스트로 저장될 때 프로젝트 저장부에서 발생하던
     AttributeError('list' object has no attribute 'get') 수정
@@ -897,14 +908,22 @@ with tab1:
             st.markdown(f"**로그라인:** {cc.get('logline', '')}")
             st.markdown(f"**장르:** {cc.get('genre', '')}")
 
-            formula_label = WUXIA_FORMULAS.get(cc.get('formula_key', ''), {}).get('label', '')
-            ptype_label = PROTAGONIST_TYPES.get(cc.get('protagonist_type', ''), {}).get('label', '')
+            # formula/protagonist 키는 경로별로 이름이 다름:
+            #   아이디어·직접입력 경로 → formula_key / protagonist_type
+            #   IdeaSeed 변환 경로     → wuxia_formula_main / protagonist_type
+            _formula_key = cc.get("formula_key") or cc.get("wuxia_formula_main") or ""
+            _ptype_key = cc.get("protagonist_type") or ""
+            formula_label = WUXIA_FORMULAS.get(_formula_key, {}).get('label', _formula_key)
+            ptype_label = PROTAGONIST_TYPES.get(_ptype_key, {}).get('label', _ptype_key)
             st.markdown(f"**공식:** {formula_label}")
             st.markdown(f"**주인공 유형:** {ptype_label}")
 
         with col2:
-            st.markdown(f"**타깃 플랫폼:** {cc.get('target_platform', '')}")
-            st.markdown(f"**등급:** {cc.get('target_rating', '')}")
+            # 타깃/등급도 경로별 키명 폴백
+            _platform = cc.get("target_platform") or cc.get("locked_distribution_priority") or ""
+            _rating = cc.get("target_rating") or cc.get("rating") or ""
+            st.markdown(f"**타깃 플랫폼:** {_platform}")
+            st.markdown(f"**등급:** {_rating}")
             motifs = _normalize_motifs(cc.get("narrative_motifs"))
             if motifs:
                 st.markdown(f"**모티프:** {', '.join(motifs[:3])}")
@@ -932,10 +951,42 @@ with tab1:
                     max_tokens=MAX_TOKENS_STRUCTURE,
                 )
                 parsed = safe_json(raw)
-                if parsed:
-                    st.session_state.concept_card = _coerce_concept_card(parsed)
+                augmented = _coerce_concept_card(parsed)
+                if augmented:
+                    st.session_state.concept_card = augmented
                     st.success("보강 완료")
                     st.rerun()
+                else:
+                    # 보강 실패 — 기존 카드를 보존하고 알림만
+                    st.error("보강 결과를 해석하지 못했습니다. 기존 카드를 유지합니다. 다시 시도해 주세요.")
+
+        # ──── 다음 단계 안내 ────
+        st.markdown("---")
+
+        # 필수 값 점검 (경로별 키명 폴백 반영)
+        _missing = []
+        if not (cc.get("formula_key") or cc.get("wuxia_formula_main")):
+            _missing.append("공식")
+        if not (cc.get("target_platform") or cc.get("locked_distribution_priority")):
+            _missing.append("타깃 플랫폼")
+        if not (cc.get("target_rating") or cc.get("rating")):
+            _missing.append("등급")
+
+        if _missing:
+            st.warning(
+                "다음 항목이 비어 있습니다: **"
+                + ", ".join(_missing)
+                + "**\n\n"
+                "위 **전체 JSON 보기 / 편집**에서 직접 채우거나, **빈 필드 자동 보강**을 사용할 수 있습니다. "
+                "이 값들은 STEP 2 Core Arc 설계에 쓰이므로 채워두시길 권장합니다."
+            )
+        else:
+            st.success("컨셉 카드가 준비되었습니다. 위 상단 **STEP 2 · BUILD-UP** 탭으로 이동해 Core Arc 설계를 시작하세요.")
+
+        st.info(
+            "다음 단계 → 상단 **STEP 2 · BUILD-UP** 탭을 클릭하면 "
+            "Core Arc 50화 비트 · 떡밥 맵 · 캐릭터 바이블을 설계합니다."
+        )
 
 
 # ══════════════════════════════════════════════
