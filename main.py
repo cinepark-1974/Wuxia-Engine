@@ -1,9 +1,16 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.1.3 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.1.4 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.1.4 (2026-07-21) — Restore Stability + Diagnostic
+  · 프로젝트 불러오기가 rerun마다 반복 복원되던 문제 수정
+    — 파일 식별자(_restored_file_sig)로 1회만 복원하도록 가드
+  · 복원 완료 후 STEP 2 이동 안내 메시지 추가
+  · STEP 2 카드 미인식 시 concept_card 실제 상태를 화면에
+    표시하는 진단 라인 추가 (원인 확정 후 제거 예정)
+
 v2.1.3 (2026-07-21) — Concept UX + Schema Fallback
   · 컨셉 카드 하단에 다음 단계(STEP 2) 진행 안내 추가
     — 자동 보강 후 화면이 초기 탭으로 돌아가 "막힌 것처럼"
@@ -519,6 +526,8 @@ defaults = {
     "post_25_decided": False,      # 26화 이후 모드 결정 여부
     # v2.0 IdeaSeed
     "wuxia_idea_seed_data": None,  # 업로드된 IdeaSeed JSON dict
+    # v2.1.4 복원 가드
+    "_restored_file_sig": None,    # 마지막으로 복원한 프로젝트 파일 식별자
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -648,15 +657,21 @@ with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
             label_visibility="collapsed",
         )
         if uploaded_project is not None:
-            try:
-                loaded = json.loads(uploaded_project.read().decode("utf-8"))
-                if restore_project_snapshot(loaded):
-                    st.success("✅ 프로젝트 복원 완료")
-                    st.rerun()
-                else:
-                    st.error("❌ 올바르지 않은 프로젝트 파일")
-            except Exception as e:
-                st.error(f"❌ 불러오기 실패: {e}")
+            # 같은 파일이 rerun마다 재복원되는 것을 막기 위해 파일 식별자로 1회만 처리
+            _file_sig = f"{uploaded_project.name}_{uploaded_project.size}"
+            if st.session_state.get("_restored_file_sig") != _file_sig:
+                try:
+                    loaded = json.loads(uploaded_project.read().decode("utf-8"))
+                    if restore_project_snapshot(loaded):
+                        st.session_state["_restored_file_sig"] = _file_sig
+                        st.success("✅ 프로젝트 복원 완료")
+                        st.rerun()
+                    else:
+                        st.error("❌ 올바르지 않은 프로젝트 파일")
+                except Exception as e:
+                    st.error(f"❌ 불러오기 실패: {e}")
+            else:
+                st.success("✅ 프로젝트 복원 완료 (상단 STEP 2 · BUILD-UP 탭으로 이동하세요)")
 
 
 # ══════════════════════════════════════════════
@@ -997,6 +1012,13 @@ with tab2:
 
     if not st.session_state.concept_card:
         st.warning("먼저 STEP 1에서 컨셉 카드를 생성해주세요.")
+        # 진단용: concept_card의 실제 상태 표시 (원인 확인 후 제거 예정)
+        _cc_state = st.session_state.get("concept_card")
+        st.caption(
+            f"[진단] concept_card 타입: {type(_cc_state).__name__} / "
+            f"값 있음: {bool(_cc_state)} / "
+            f"키 개수: {len(_cc_state) if isinstance(_cc_state, dict) else 'N/A'}"
+        )
     else:
         build_tab1, build_tab2, build_tab3, build_tab4 = st.tabs([
             "Core Arc (50화)",
