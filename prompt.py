@@ -34,8 +34,8 @@ v1.0 (2026-XX) — 초기 무협 엔진
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.1.0"
-ENGINE_BUILD_DATE = "2026-05-19"
+ENGINE_VERSION = "v2.1.1"
+ENGINE_BUILD_DATE = "2026-07-21"
 
 # ═══════════════════════════════════════════════════
 # SYSTEM PROMPT — 무협 웹소설 작가 페르소나

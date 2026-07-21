@@ -1,9 +1,17 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.1.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.1.1 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.1.1 (2026-07-21) — Hotfix
+  · 컨셉 카드 표시 시 narrative_motifs 자료형 불일치로 인한
+    TypeError(unhashable type: 'slice') 수정
+  · _normalize_motifs() 헬퍼 추가 — 배열/딕셔너리/문자열/None
+    네 형태를 모두 표시용 리스트로 통일
+    (IdeaSeed 변환 경로는 딕셔너리, 아이디어·직접입력 경로는
+     배열을 생성하던 이원화 문제 흡수)
+
 v2.1.0 (2026-05-19) — Quality Pack
   · prompt.py에서 ENGINE_VERSION / ENGINE_BUILD_DATE 상수 import
   · ROMANCE_FORMULAS / get_romance_formula_block import 추가
@@ -523,6 +531,45 @@ PROJECT_KEYS = [
 ]
 
 
+def _normalize_motifs(motifs):
+    """
+    narrative_motifs를 표시용 문자열 리스트로 정규화한다.
+
+    두 경로가 서로 다른 자료형을 만들어낸다:
+      - 아이디어 생성 / 직접 입력 경로 → 배열  ["A", "B", "C"]
+      - IdeaSeed 변환 경로            → 딕셔너리 {"primary": "A",
+                                                  "secondary": ["B"],
+                                                  "tertiary": ["C"]}
+    두 형태 모두, 그리고 문자열·None까지 안전하게 리스트로 통일한다.
+    """
+    if not motifs:
+        return []
+
+    # 이미 리스트인 경우 (기존 배열 스키마)
+    if isinstance(motifs, list):
+        return [str(m) for m in motifs if m]
+
+    # 딕셔너리인 경우 (IdeaSeed 변환 스키마: primary/secondary/tertiary)
+    if isinstance(motifs, dict):
+        result = []
+        primary = motifs.get("primary")
+        if primary:
+            result.append(str(primary))
+        for tier in ("secondary", "tertiary"):
+            val = motifs.get(tier)
+            if isinstance(val, list):
+                result.extend(str(v) for v in val if v)
+            elif val:
+                result.append(str(val))
+        return result
+
+    # 단일 문자열인 경우
+    if isinstance(motifs, str):
+        return [motifs]
+
+    return []
+
+
 def build_project_snapshot():
     snapshot = {"version": "wuxia-1.0", "saved_at": datetime.now().isoformat()}
     for k in PROJECT_KEYS:
@@ -829,7 +876,7 @@ with tab1:
         with col2:
             st.markdown(f"**타깃 플랫폼:** {cc.get('target_platform', '')}")
             st.markdown(f"**등급:** {cc.get('target_rating', '')}")
-            motifs = cc.get("narrative_motifs", [])
+            motifs = _normalize_motifs(cc.get("narrative_motifs"))
             if motifs:
                 st.markdown(f"**모티프:** {', '.join(motifs[:3])}")
 
