@@ -1,9 +1,18 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.1.5 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.1.6 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.1.6 (2026-07-21) — Arc Token Fix
+  · MAX_TOKENS_ARC 12000 → 32000 상향
+    — 50화 Core Arc 응답이 12000 토큰 한도로 7화 부근에서 잘려
+       safe_json 파싱 실패 → "Arc 생성 실패"로 처리되던 문제 해결
+    — Extension Arc·Character Bible도 동일 상수 사용으로 함께 안정화
+    — Opus 4.7 최대 출력 128K 범위 내, 스트리밍 사용 중이라 안전
+  · Arc 생성 결과 처리 개선 — 부분 생성(잘림) 시 있는 만큼 보존하고
+    경고 표시, 완전 실패 시 재시도·회차 축소 안내
+
 v2.1.5 (2026-07-21) — Motif Schema Unification
   · build_core_arc_prompt의 narrative_motifs 딕셔너리 인덱싱
     (motifs[0])으로 인한 KeyError: 0 수정
@@ -311,7 +320,7 @@ st.markdown("""
 # ══════════════════════════════════════════════
 MODEL_OPUS = "claude-opus-4-7"      # v2.0 — 집필 (temperature/top_p/thinking 사용 금지)
 MODEL_SONNET = "claude-sonnet-4-6"  # v2.0 — 구조 분석·자가 검수
-MAX_TOKENS_ARC = 12000
+MAX_TOKENS_ARC = 32000     # v2.1.6 — 50화 Arc 잘림 방지 (Opus 4.7 최대 128K 내)
 MAX_TOKENS_EPISODE = 8000
 MAX_TOKENS_STRUCTURE = 6000
 MAX_TOKENS_ANALYSIS = 4000
@@ -1064,13 +1073,22 @@ with tab2:
                         max_tokens=MAX_TOKENS_ARC,
                     )
                     parsed = safe_json(raw)
-                    if parsed and isinstance(parsed, list):
+                    if parsed and isinstance(parsed, list) and len(parsed) > 0:
                         st.session_state.core_arc = parsed
-                        st.success(f"✅ Core Arc {len(parsed)}화 생성 완료")
+                        if len(parsed) < core_eps:
+                            st.warning(
+                                f"⚠️ {len(parsed)}화만 생성되었습니다 (요청: {core_eps}화). "
+                                "응답이 중간에 잘렸을 수 있습니다. 다시 생성하거나 회차 수를 줄여 시도해 주세요."
+                            )
+                        else:
+                            st.success(f"✅ Core Arc {len(parsed)}화 생성 완료")
                     else:
-                        st.error("❌ Arc 생성 실패")
-                        with st.expander("원본"):
-                            st.text(raw[:3000])
+                        st.error(
+                            "❌ Arc 생성 실패 — 응답을 JSON으로 해석하지 못했습니다. "
+                            "잠시 후 다시 시도하거나, 회차 수를 줄여 주세요."
+                        )
+                        with st.expander("원본 응답 (디버그)"):
+                            st.text(raw[:3000] if raw else "(빈 응답)")
 
             if st.session_state.core_arc:
                 st.markdown(f"**총 {len(st.session_state.core_arc)}화 설계 완료**")
