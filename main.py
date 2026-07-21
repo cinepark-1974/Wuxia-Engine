@@ -1,9 +1,18 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.1.1 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.1.2 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.1.2 (2026-07-21) — Hotfix
+  · 컨셉 카드가 리스트로 저장될 때 프로젝트 저장부에서 발생하던
+    AttributeError('list' object has no attribute 'get') 수정
+  · _coerce_concept_card() 헬퍼 추가 — safe_json/직접입력이
+    배열([{...}])을 반환해도 첫 dict 원소로 보정
+  · concept_card 저장 6개 경로(기획서·아이디어·직접입력·
+    IdeaSeed·편집저장·자동보강)에 일괄 적용
+  · 프로젝트 저장 블록 title 추출에 dict 타입 가드 추가
+
 v2.1.1 (2026-07-21) — Hotfix
   · 컨셉 카드 표시 시 narrative_motifs 자료형 불일치로 인한
     TypeError(unhashable type: 'slice') 수정
@@ -570,6 +579,25 @@ def _normalize_motifs(motifs):
     return []
 
 
+def _coerce_concept_card(parsed):
+    """
+    safe_json 결과를 컨셉 카드(dict)로 보정한다.
+
+    LLM이 카드를 [{...}] 처럼 배열로 감싸 내놓거나, safe_json이
+    배열을 반환하는 경우가 있다. 컨셉 카드는 항상 dict여야 하므로:
+      - dict          → 그대로
+      - [dict, ...]   → 첫 dict 원소를 사용
+      - 그 외          → None (호출부에서 실패 처리)
+    """
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, dict):
+                return item
+    return None
+
+
 def build_project_snapshot():
     snapshot = {"version": "wuxia-1.0", "saved_at": datetime.now().isoformat()}
     for k in PROJECT_KEYS:
@@ -591,7 +619,8 @@ with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
     with col_a:
         snapshot = build_project_snapshot()
         snapshot_json = json.dumps(snapshot, ensure_ascii=False, indent=2)
-        title = st.session_state.concept_card.get("title", "wuxia_project")
+        _cc = st.session_state.concept_card
+        title = _cc.get("title", "wuxia_project") if isinstance(_cc, dict) else "wuxia_project"
         safe_title = re.sub(r"[^\w\-]", "_", title)
         st.download_button(
             "📥 현재 프로젝트 저장 (.json)",
@@ -678,7 +707,7 @@ with tab1:
                         # debug=True로 상세 진단 정보 받기
                         parsed, debug_info = safe_json(raw, debug=True)
                         if parsed:
-                            st.session_state.concept_card = parsed
+                            st.session_state.concept_card = _coerce_concept_card(parsed)
                             st.success("✅ 컨셉 카드 생성 완료")
                             st.rerun()
                         else:
@@ -731,7 +760,7 @@ with tab1:
                 )
                 parsed = safe_json(raw)
                 if parsed:
-                    st.session_state.concept_card = parsed
+                    st.session_state.concept_card = _coerce_concept_card(parsed)
                     st.success("✅ 컨셉 카드 생성 완료")
                     st.rerun()
                 else:
@@ -752,7 +781,7 @@ with tab1:
         if st.button("💾 직접 입력한 JSON 저장", use_container_width=True, key="save_manual"):
             try:
                 parsed = json.loads(manual_json)
-                st.session_state.concept_card = parsed
+                st.session_state.concept_card = _coerce_concept_card(parsed)
                 st.success("✅ 컨셉 카드 저장 완료")
                 st.rerun()
             except json.JSONDecodeError as e:
@@ -845,7 +874,7 @@ with tab1:
                     )
                     parsed = safe_json(raw)
                     if parsed:
-                        st.session_state.concept_card = parsed
+                        st.session_state.concept_card = _coerce_concept_card(parsed)
                         st.success("✅ IdeaSeed → 컨셉 카드 변환 완료")
                         st.balloons()
                         st.rerun()
@@ -889,7 +918,7 @@ with tab1:
             )
             if st.button("💾 편집 내용 저장"):
                 try:
-                    st.session_state.concept_card = json.loads(edited)
+                    st.session_state.concept_card = _coerce_concept_card(json.loads(edited))
                     st.success("저장 완료")
                     st.rerun()
                 except json.JSONDecodeError as e:
@@ -904,7 +933,7 @@ with tab1:
                 )
                 parsed = safe_json(raw)
                 if parsed:
-                    st.session_state.concept_card = parsed
+                    st.session_state.concept_card = _coerce_concept_card(parsed)
                     st.success("보강 완료")
                     st.rerun()
 
