@@ -1,9 +1,22 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.1.6 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.1.7 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.1.7 (2026-07-22) — safe_json Array Extraction Fix
+  · [핵심] extract_json_block 괄호 탐색 순서 버그 수정
+    — 항상 "{"를 먼저 탐색해서, 최상위가 배열([...])인 응답에서
+       배열 안의 첫 회차 객체만 추출 → dict로 축소
+    — Core Arc(50화 배열)가 isinstance(list) 검사에 걸려
+       "Arc 생성 실패 — JSON 해석 불가"로 항상 실패하던 원인
+    — 수정: 먼저 등장하는 괄호 타입을 최상위로 간주해 추출
+  · safe_json 3단계 잘림 복구 재설계 — 요소 경계 인식 방식
+    — 문자열 안의 괄호를 세거나 문자열 중간에서 자르던 약점 제거
+    — 50화 중 N화에서 잘려도 앞의 완결된 회차를 온전히 복구
+  · Core Arc 실패 시 디버그 표시 강화
+    — 실패 단계·에러 내용·응답 앞/끝 2,000자 표시 (잘림 진단용)
+
 v2.1.6 (2026-07-21) — Arc Token Fix
   · MAX_TOKENS_ARC 12000 → 32000 상향
     — 50화 Core Arc 응답이 12000 토큰 한도로 7화 부근에서 잘려
@@ -378,35 +391,42 @@ def safe_json(raw, debug=False):
     cleaned = re.sub(r"```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
     cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE).strip()
 
-    # ── JSON 블록 추출 헬퍼 ──
+    # ── JSON 블록 추출 헬퍼 (v2.1.7 수정) ──
+    # 기존 버그: 항상 "{"를 먼저 탐색해서, 최상위가 배열([...])인 응답에서
+    # 배열 안의 첫 번째 객체({...})만 잘라내는 문제가 있었음.
+    # → Core Arc(50화 배열)가 dict 하나로 축소되어 "Arc 생성 실패" 발생.
+    # 수정: 텍스트에서 먼저 등장하는 괄호 타입을 최상위로 간주하고
+    # 그 타입만으로 짝을 맞춰 추출한다.
     def extract_json_block(text):
-        for open_c, close_c in [("{", "}"), ("[", "]")]:
-            start = text.find(open_c)
-            if start < 0:
+        positions = [(text.find(c), c) for c in "{["]
+        positions = [(p, c) for p, c in positions if p >= 0]
+        if not positions:
+            return None
+        start, top_open = min(positions)
+        open_c, close_c = ("[", "]") if top_open == "[" else ("{", "}")
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
                 continue
-            depth = 0
-            in_string = False
-            escape = False
-            for i in range(start, len(text)):
-                ch = text[i]
-                if escape:
-                    escape = False
-                    continue
-                if ch == "\\":
-                    escape = True
-                    continue
-                if ch == '"' and not escape:
-                    in_string = not in_string
-                    continue
-                if in_string:
-                    continue
-                if ch == open_c:
-                    depth += 1
-                elif ch == close_c:
-                    depth -= 1
-                    if depth == 0:
-                        return text[start:i + 1]
-        return None
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == open_c:
+                depth += 1
+            elif ch == close_c:
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+        return None  # 닫는 괄호 없음 → 잘린 응답, 3단계에서 복구
 
     block = extract_json_block(cleaned)
     if block:
@@ -449,65 +469,66 @@ def safe_json(raw, debug=False):
         error_info["stage_failed"] = "stage2_guide_removal"
         error_info["error"] = str(e2)
 
-    # ── 3단계: 잘린 JSON 자동 복구 (닫히지 않은 괄호 보강) ──
-    # LLM 응답이 토큰 한도로 잘려서 끝부분이 손상된 경우
-    cleaned_v3 = cleaned_v2
+    # ── 3단계: 잘린 JSON 자동 복구 (v2.1.7 재설계) ──
+    # LLM 응답이 토큰 한도로 중간에서 잘린 경우.
+    # 기존 방식의 약점 두 가지를 함께 수정:
+    #   1) count("{")로 괄호 수를 세면 문자열 안의 괄호까지 세어 오판
+    #   2) rfind(",")로 자르면 문자열 중간에서 잘려 따옴표 짝이 깨짐
+    # 새 방식: 문자열 인식 스캔으로 "완결된 요소"의 경계마다 위치를
+    # 기록해 두고, 잘림이 감지되면 마지막 완결 요소까지만 남긴 뒤
+    # 그 시점의 열린 괄호를 순서대로 닫는다.
+    # → 50화 중 31화에서 잘려도 앞의 30화를 온전히 살려낸다.
+    start3 = min(
+        [p for p in (cleaned_v2.find("{"), cleaned_v2.find("[")) if p >= 0],
+        default=-1,
+    )
+    if start3 < 0:
+        error_info["stage_failed"] = "stage3_no_json_start"
+        return (None, error_info) if debug else None
 
-    # 마지막 정상 위치까지 자르기 (마지막 콜론·콤마 후로 잘려있으면 그 앞까지)
-    # ", "key": ... <끝>" 같은 패턴 제거
-    # 끝부분에서 마지막 닫는 괄호 위치 추적
-    last_safe = -1
-    depth_curly = 0
-    depth_square = 0
+    text3 = cleaned_v2[start3:]
+    stack = []            # 현재 열려 있는 괄호 스택
     in_str = False
     esc = False
-    for i, ch in enumerate(cleaned_v3):
+    last_safe = 0         # 마지막 완결 요소의 끝 위치 (exclusive)
+    stack_at_safe = []    # 그 시점의 열린 괄호 스택 (복구용)
+    for i, ch in enumerate(text3):
         if esc:
             esc = False
             continue
         if ch == "\\":
             esc = True
             continue
-        if ch == '"' and not esc:
+        if ch == '"':
             in_str = not in_str
             continue
         if in_str:
             continue
-        if ch == "{":
-            depth_curly += 1
-        elif ch == "}":
-            depth_curly -= 1
-            if depth_curly == 0 and depth_square == 0:
-                last_safe = i
-        elif ch == "[":
-            depth_square += 1
-        elif ch == "]":
-            depth_square -= 1
-            if depth_curly == 0 and depth_square == 0:
-                last_safe = i
+        if ch in "[{":
+            stack.append(ch)
+        elif ch in "]}":
+            if stack:
+                stack.pop()
+            # 닫는 괄호 직후는 항상 문자열 밖의 안전한 절단 지점
+            # (중첩 깊이와 무관하게 기록해야 깊은 곳에서 잘린 경우도 복구 가능)
+            last_safe = i + 1
+            stack_at_safe = list(stack)
+            if not stack:
+                break
 
-    # 닫히지 않은 괄호 자동 보강
-    if depth_curly > 0 or depth_square > 0:
-        # 끝 부분의 ", "incomplete_key": ..." 같은 미완성 항목 제거
-        # 마지막 정상적인 ", " 또는 "{" 또는 "[" 직후까지 자르기
-        last_comma_or_open = max(
-            cleaned_v3.rfind(","),
-            cleaned_v3.rfind("{"),
-            cleaned_v3.rfind("["),
-        )
-        if last_comma_or_open > 0:
-            cleaned_v3 = cleaned_v3[:last_comma_or_open]
-            # trailing comma 제거
-            cleaned_v3 = cleaned_v3.rstrip().rstrip(",")
+    if stack:
+        # 잘림 발생 — 완결 요소가 하나도 없으면 복구 불가
+        if last_safe == 0:
+            error_info["stage_failed"] = "stage3_no_complete_element"
+            return (None, error_info) if debug else None
+        cleaned_v3 = text3[:last_safe].rstrip().rstrip(",")
+        for br in reversed(stack_at_safe):
+            cleaned_v3 += "]" if br == "[" else "}"
+    else:
+        cleaned_v3 = text3[:last_safe]
 
-        # 여전히 닫히지 않은 괄호 보강
-        depth_curly = cleaned_v3.count("{") - cleaned_v3.count("}")
-        depth_square = cleaned_v3.count("[") - cleaned_v3.count("]")
-        for _ in range(depth_square):
-            cleaned_v3 += "]"
-        for _ in range(depth_curly):
-            cleaned_v3 += "}"
-
+    # trailing comma 정리 후 파싱
+    cleaned_v3 = re.sub(r",(\s*[}\]])", r"\1", cleaned_v3)
     try:
         return (json.loads(cleaned_v3), error_info) if debug else json.loads(cleaned_v3)
     except json.JSONDecodeError as e3:
@@ -1072,7 +1093,7 @@ with tab2:
                         ),
                         max_tokens=MAX_TOKENS_ARC,
                     )
-                    parsed = safe_json(raw)
+                    parsed, parse_info = safe_json(raw, debug=True)
                     if parsed and isinstance(parsed, list) and len(parsed) > 0:
                         st.session_state.core_arc = parsed
                         if len(parsed) < core_eps:
@@ -1088,7 +1109,18 @@ with tab2:
                             "잠시 후 다시 시도하거나, 회차 수를 줄여 주세요."
                         )
                         with st.expander("원본 응답 (디버그)"):
-                            st.text(raw[:3000] if raw else "(빈 응답)")
+                            st.markdown(
+                                f"**응답 길이:** {parse_info.get('raw_length', 0):,}자 · "
+                                f"**실패 단계:** {parse_info.get('stage_failed', '?')} · "
+                                f"**에러:** {parse_info.get('error', '?')}"
+                            )
+                            if raw:
+                                st.markdown("**앞부분 (2,000자):**")
+                                st.text(raw[:2000])
+                                st.markdown("**끝부분 (2,000자):**")
+                                st.text(raw[-2000:])
+                            else:
+                                st.text("(빈 응답)")
 
             if st.session_state.core_arc:
                 st.markdown(f"**총 {len(st.session_state.core_arc)}화 설계 완료**")

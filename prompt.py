@@ -5,6 +5,11 @@
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.1.7 (2026-07-22) — safe_json Array Extraction Fix (main.py 연동)
+  · ENGINE_VERSION / ENGINE_BUILD_DATE 갱신
+  · 실제 수정은 main.py의 safe_json (배열 추출 버그 + 잘림 복구 재설계)
+  · v2.1.1~v2.1.6 은 main.py 단독 패치 (버전 상수만 동기화되어 옴)
+
 v2.1.0 (2026-05-19) — Quality Pack
   · A21 1차/2차 위기 구조 룰 신설 (메인플롯 50~65% + 서브플롯 75~85%)
   · A22 첫 장면 9유형 룰 신설 (사건발생형·의문유발형·행동형 등 9유형)
@@ -34,8 +39,8 @@ v1.0 (2026-XX) — 초기 무협 엔진
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.1.6"
-ENGINE_BUILD_DATE = "2026-07-21"
+ENGINE_VERSION = "v2.1.7"
+ENGINE_BUILD_DATE = "2026-07-22"
 
 # ═══════════════════════════════════════════════════
 # SYSTEM PROMPT — 무협 웹소설 작가 페르소나
