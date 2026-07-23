@@ -1,9 +1,16 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.1.0 — engine_validator.py
+👖 BLUE JEANS WUXIA ENGINE v2.2.0 — engine_validator.py
 ═══════════════════════════════════════════════════════════
-회차 자가 검수 · 재료 활용 검증 · 전환점 자동 감지
+회차 자가 검수 · 재료 활용 검증 · 전환점 자동 감지 · 문체 정적 스캐너
 
 [변경 이력]
+v2.2.0 (2026-07-23) — Prose Style Scanner
+  · scan_prose_style() 신설 — A23(계측·리포트체)·A24(설정 재료 반복)
+    정규식 기반 정적 검출. LLM 미사용 → 재현성 100% 보장
+  · format_prose_scan_report() 신설 — UI 표시·REDO 프롬프트 주입 공용
+  · 원칙: 검출만 한다. 자동 수정·삭제 없음 (본문은 작가의 영역)
+  · 인물명은 별칭 매칭으로 반복 검출에서 제외 (사고 패턴 H 적용)
+
 v2.1.0 (2026-05-19) — Quality Pack
   · _score_mise_en_scene: martial/visual/sensory 키워드 사전에 활용형 보강
     (WebNovel v3.3 사고 사례: "뜨거워"만 등록 → "뜨거웠다" 누락으로 거짓 저점)
@@ -36,6 +43,7 @@ v2.0 (2026-05) — 초기 자가 검수 엔진
 © 2026 BLUE JEANS PICTURES
 """
 
+import re
 from typing import List, Dict, Optional, Tuple
 
 # Wuxia Engine 데이터 모듈 import
@@ -937,6 +945,216 @@ def _recommend_next_mode(avg_overall: float, axis_avgs: dict, weakest: list) -> 
 # ============================================================================
 # 자가 테스트
 # ============================================================================
+# ═══════════════════════════════════════════════════
+# 문체 정적 스캐너 (A23·A24) — v2.2.0 신규
+# LLM 없이 정규식·카운팅으로 검출 → 같은 본문이면 항상 같은 결과
+# 원칙: 검출만 한다. 자동 수정·삭제는 하지 않는다 (본문은 작가의 영역).
+# ═══════════════════════════════════════════════════
+
+# 반복 어절 검출에서 제외할 일반 서술어·기능어 어간
+_PROSE_SCAN_STOPWORDS = {
+    "있었", "없었", "것이", "그것", "그리", "하지", "않았", "않은", "않는",
+    "했다", "한다", "하는", "하고", "하며", "해서", "위해", "때문", "그러",
+    "이었", "아니", "같았", "같은", "같이", "보였", "보다", "보고", "듯이",
+    "듯했", "채로", "쪽으", "앞에", "뒤에", "위에", "아래", "안에", "밖으",
+    "속에", "사이", "순간", "지금", "다시", "이제", "아직", "함께", "모두",
+    "자신", "그녀", "소리", "시선", "얼굴", "고개", "손을", "눈을", "몸을",
+    "말을", "말이", "말했", "물었", "대답", "생각", "잠깐", "잠시", "자기",
+    "소년", "소녀", "남자", "여자", "사람", "그대", "천천", "조용", "가만",
+}
+
+# 초 단위 계측 패턴 (아라비아 숫자 + 한글 수사)
+_MEASURE_TIME_RE = re.compile(
+    r"(\d+(?:\.\d+)?\s*초)"
+    r"|(초당\s*[가-힣\d]+)"
+    r"|((?:일|이|삼|사|오|육|칠|팔|구|십)\s*초(?:쯤|간|만에)?)"
+)
+
+# 인지 부정 부연 패턴
+_COGNITION_DENIAL_RE = re.compile(
+    r"(?:본인|자신|스스로)[은는이가도]?\s*[^\n。.]{0,25}?"
+    r"(?:의식하지 못|느끼지 못|인지하지 못|알지 못한 채|눈치채지 못)"
+)
+
+# 정밀 관찰 부사 (회차당 2회 이상이면 검출)
+_PRECISION_ADVERBS = ["미세하게", "미묘하게"]
+
+# 계측 명사 (회차당 2회 이상이면 검출)
+_MEASURE_NOUNS = ["각도", "궤적", "좌표", "어깨선"]
+
+
+def _find_lines_with(text: str, needle: str) -> List[str]:
+    """needle이 포함된 줄을 발췌 (앞뒤 여백 정리, 최대 60자)."""
+    out = []
+    for line in text.split("\n"):
+        if needle in line:
+            s = line.strip()
+            out.append(s[:60] + ("…" if len(s) > 60 else ""))
+    return out
+
+
+def scan_prose_style(text: str, character_bible: dict = None) -> dict:
+    """
+    A23(계측·리포트체) + A24(설정 재료 반복) 정적 스캐너.
+
+    LLM을 쓰지 않으므로 재현성이 100% 보장된다.
+    검출 결과는 위반 문장 발췌와 함께 반환하며, 수정은 하지 않는다.
+
+    Args:
+        text: 회차 본문
+        character_bible: 캐릭터 바이블 (인물명을 반복 검출에서 제외하는 용도)
+
+    Returns:
+        {
+          "violations": [ {"rule", "label", "count", "samples": [...]} ],
+          "repeated_stems": [ {"stem", "count"} ],   # A24 참고용
+          "total_flags": int,
+          "clean": bool,
+        }
+    """
+    if not text or not isinstance(text, str):
+        return {"violations": [], "repeated_stems": [], "total_flags": 0, "clean": True}
+
+    violations = []
+
+    # ── A23-1. 초 단위 계측 ──
+    time_hits = _MEASURE_TIME_RE.findall(text)
+    time_matches = ["".join(t) for t in time_hits]
+    if time_matches:
+        samples = []
+        for m in dict.fromkeys(time_matches):  # 중복 제거, 순서 유지
+            samples.extend(_find_lines_with(text, m)[:2])
+        violations.append({
+            "rule": "A23",
+            "label": "초 단위 계측 서술",
+            "count": len(time_matches),
+            "samples": samples[:5],
+        })
+
+    # ── A23-2. 인지 부정 부연 ──
+    denial_hits = _COGNITION_DENIAL_RE.findall(text)
+    if denial_hits:
+        samples = []
+        for m in dict.fromkeys(denial_hits):
+            samples.extend(_find_lines_with(text, m)[:2])
+        violations.append({
+            "rule": "A23",
+            "label": "인지 부정 부연 (서술자의 계측 보고)",
+            "count": len(denial_hits),
+            "samples": samples[:5],
+        })
+
+    # ── A23-3. 정밀 관찰 부사 (2회 이상) ──
+    for adv in _PRECISION_ADVERBS:
+        cnt = text.count(adv)
+        if cnt >= 2:
+            violations.append({
+                "rule": "A23",
+                "label": f'정밀 관찰 부사 "{adv}" 남용',
+                "count": cnt,
+                "samples": _find_lines_with(text, adv)[:3],
+            })
+
+    # ── A23-4. 계측 명사 (2회 이상) ──
+    for noun in _MEASURE_NOUNS:
+        cnt = text.count(noun)
+        if cnt >= 2:
+            violations.append({
+                "rule": "A23",
+                "label": f'계측 명사 "{noun}" 반복',
+                "count": cnt,
+                "samples": _find_lines_with(text, noun)[:3],
+            })
+
+    # ── A10 보조. "~하는 것이었다" (3회 이상) ──
+    cnt = text.count("는 것이었다")
+    if cnt >= 3:
+        violations.append({
+            "rule": "A10",
+            "label": '"~하는 것이었다" 구문 남용',
+            "count": cnt,
+            "samples": _find_lines_with(text, "는 것이었다")[:3],
+        })
+
+    # ── A24. 반복 어간 검출 (버릇·습관·소품 과잉 반복 감지) ──
+    # 인물명은 정당한 반복이므로 제외 (별칭 매칭: 사고 패턴 H)
+    name_stems = set()
+    if isinstance(character_bible, dict):
+        def _collect_names(node):
+            if isinstance(node, dict):
+                nm = node.get("name", "")
+                if isinstance(nm, str) and nm:
+                    # "서지훈 (徐志勳)" → "서지훈" + "지훈" (성 제외 별칭)
+                    base = nm.split("(")[0].strip()
+                    if base:
+                        name_stems.add(base[:2])
+                        name_stems.add(base)
+                        if len(base) >= 3:
+                            name_stems.add(base[1:])  # 이름만 (성 제외)
+                for v in node.values():
+                    _collect_names(v)
+            elif isinstance(node, list):
+                for v in node:
+                    _collect_names(v)
+        _collect_names(character_bible)
+
+    # 어절 → 조사·어미 제거한 어간 카운트
+    _josa_re = re.compile(
+        r"(을|를|이|가|은|는|의|에|에서|으로|로|와|과|도|만|까지|부터|처럼|보다"
+        r"|했다|한다|하는|하고|하며|해서|했고|하지|하던|합니다"
+        r"|았다|었다|였다|이다|이었다|겠다|런지|든지)$"
+    )
+    stem_counts = {}
+    for token in re.findall(r"[가-힣]{2,}", text):
+        stem = _josa_re.sub("", token)
+        if len(stem) < 2:
+            continue
+        if stem in _PROSE_SCAN_STOPWORDS:
+            continue
+        if any(stem.startswith(n) or n.startswith(stem) for n in name_stems if n):
+            continue
+        stem_counts[stem] = stem_counts.get(stem, 0) + 1
+
+    repeated = [
+        {"stem": s, "count": c}
+        for s, c in sorted(stem_counts.items(), key=lambda x: -x[1])
+        if c >= 8
+    ][:10]
+
+    total_flags = sum(v["count"] for v in violations)
+    return {
+        "violations": violations,
+        "repeated_stems": repeated,
+        "total_flags": total_flags,
+        "clean": (not violations and not repeated),
+    }
+
+
+def format_prose_scan_report(scan_result: dict, ep_number: int = 0) -> str:
+    """스캐너 결과를 작가용 마크다운 리포트로 변환.
+
+    UI 표시와 REDO 프롬프트 주입에 공용으로 쓴다.
+    """
+    if not scan_result or scan_result.get("clean"):
+        return "✅ 문체 스캐너: 검출 없음 (A23·A24 기준 통과)"
+
+    lines = [f"### 🧹 문체 스캐너 검출 결과" + (f" (EP{ep_number})" if ep_number else "")]
+
+    for v in scan_result.get("violations", []):
+        lines.append(f"\n**[{v['rule']}] {v['label']}** — {v['count']}회")
+        for s in v.get("samples", []):
+            lines.append(f"- `{s}`")
+
+    repeated = scan_result.get("repeated_stems", [])
+    if repeated:
+        lines.append("\n**[A24 참고] 고빈도 반복 어간** (버릇·소품 과잉 반복 의심 — 작가 판단 필요)")
+        for r in repeated:
+            lines.append(f"- \"{r['stem']}\" × {r['count']}회")
+
+    lines.append("\n> 스캐너는 검출만 합니다. 수정 여부와 방식은 작가의 판단입니다.")
+    return "\n".join(lines)
+
+
 def _self_test():
     """모듈 자체 검증."""
     print("=== engine_validator.py 자가 테스트 ===")

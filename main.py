@@ -1,9 +1,21 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.1.7 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.2.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.2.0 (2026-07-23) — Prose Style Scanner + Anti-Measurement Pack
+  · 문체 스캐너 UI 신설 — 본문 존재 시 자동 실행 (API 미사용, 무료)
+    — A23 계측·리포트체 + A24 설정 재료 반복을 정적 검출
+    — 검출 문장을 줄 단위 발췌로 표시, 수정은 하지 않음 (작가 영역)
+  · REDO 재집필 시 스캐너 검출 결과를 프롬프트에 자동 주입
+    — "막연히 잘 써라"가 아니라 위반 문장을 알고 다시 쓰게 함
+  · prompt.py 연동: A23·A24 룰 신설, 바이블 버릇 발동 조건 규칙
+  · engine_validator.py 연동: scan_prose_style() /
+    format_prose_scan_report() 신설
+  · docx_builder.py 연동(v2.1.8 포함): 메타 라인 제거, 빈 단락 제거,
+    행간 1.5
+
 v2.1.7 (2026-07-22) — safe_json Array Extraction Fix
   · [핵심] extract_json_block 괄호 탐색 순서 버그 수정
     — 항상 "{"를 먼저 탐색해서, 최상위가 배열([...])인 응답에서
@@ -155,6 +167,8 @@ from engine_validator import (
     get_validation_mode_for_episode,
     generate_material_usage_report,
     summarize_cumulative_25,
+    scan_prose_style,               # v2.2.0 신규
+    format_prose_scan_report,       # v2.2.0 신규
 )
 
 
@@ -1603,6 +1617,16 @@ with tab3:
                             else:
                                 st.error("❌ LLM 검수 결과 파싱 실패")
 
+                # ──── 문체 스캐너 (v2.2.0 — 정적 검출, API 미사용) ────
+                prose_scan = scan_prose_style(current_ep, st.session_state.character_bible)
+                scan_label = (
+                    "🧹 문체 스캐너 — ✅ 통과"
+                    if prose_scan["clean"]
+                    else f"🧹 문체 스캐너 — ⚠️ {len(prose_scan['violations'])}개 패턴 검출"
+                )
+                with st.expander(scan_label, expanded=False):
+                    st.markdown(format_prose_scan_report(prose_scan, ep_number=selected_ep))
+
                 # 검수 결과 표시
                 if selected_ep in st.session_state.validation_results:
                     val_result = st.session_state.validation_results[selected_ep]
@@ -1647,6 +1671,12 @@ with tab3:
                             type="primary",
                         ):
                             with st.spinner("약점 보완 재집필 중... (Opus 사용)"):
+                                # v2.2.0: 문체 스캐너 검출 결과를 REDO 프롬프트에 주입
+                                redo_scan = scan_prose_style(current_ep, st.session_state.character_bible)
+                                redo_scan_report = (
+                                    "" if redo_scan["clean"]
+                                    else format_prose_scan_report(redo_scan, ep_number=selected_ep)
+                                )
                                 redo_text = call_claude_opus(
                                     build_episode_redo_prompt(
                                         current_ep,
@@ -1654,6 +1684,7 @@ with tab3:
                                         val_result,
                                         st.session_state.concept_card,
                                         json.dumps(st.session_state.character_bible, ensure_ascii=False),
+                                        prose_scan_report=redo_scan_report,
                                     ),
                                     max_tokens=MAX_TOKENS_EPISODE,
                                 )
