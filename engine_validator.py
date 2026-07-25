@@ -1,9 +1,17 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.2.0 — engine_validator.py
+👖 BLUE JEANS WUXIA ENGINE v2.3.0 — engine_validator.py
 ═══════════════════════════════════════════════════════════
 회차 자가 검수 · 재료 활용 검증 · 전환점 자동 감지 · 문체 정적 스캐너
 
 [변경 이력]
+v2.3.0 (2026-07-23) — Youth Target Diagnosis
+  · diagnose_youth_target() 신설 — A25(1020 경량화)·A26(무협 액기스)
+    정량 진단. 대사 비율·대사 밀도·묘사 연속·무공/격돌 표현 검출
+  · format_youth_diagnosis_report() 신설 — 지표표 + 미달 항목 리포트
+  · 주인공 대사 수는 의도적으로 측정하지 않음 — 단역이 바이블에
+    없으면 화자 식별이 불가해 추정치가 항상 과대 계상되므로
+    (사고 패턴 I). 대사 비율·밀도로 동일 문제를 포착
+
 v2.2.0 (2026-07-23) — Prose Style Scanner
   · scan_prose_style() 신설 — A23(계측·리포트체)·A24(설정 재료 반복)
     정규식 기반 정적 검출. LLM 미사용 → 재현성 100% 보장
@@ -1152,6 +1160,164 @@ def format_prose_scan_report(scan_result: dict, ep_number: int = 0) -> str:
             lines.append(f"- \"{r['stem']}\" × {r['count']}회")
 
     lines.append("\n> 스캐너는 검출만 합니다. 수정 여부와 방식은 작가의 판단입니다.")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════
+# 1020 타깃·장르 정량 진단 (A25·A26) — v2.3.0 신규
+# LLM 미사용. 대사 비율·주인공 대사 수·무공 시전 유무를 카운팅으로 검출.
+# ═══════════════════════════════════════════════════
+
+# 무공 시전 감지 키워드 (초식·시전 동작)
+_MARTIAL_ACTION_WORDS = [
+    "초식", "심법", "내공", "진기", "단전", "혈도", "경지", "기경", "화경",
+    "절정", "현경", "삼류", "이류", "일류", "갑자", "운기", "호신강기",
+    "검기", "검강", "장법", "권법", "지법", "신법", "보법", "검법", "도법",
+]
+# 격돌·타격 감지 키워드
+_CLASH_WORDS = [
+    "부딪", "맞부딪", "튕겨", "튕기", "베었", "베어", "찔러", "찔렀",
+    "꿰뚫", "내리쳤", "휘둘렀", "때렸", "쳤다", "박혔", "꺾었", "걷어",
+    "날아갔", "쓰러졌", "피가", "충격파", "격돌",
+]
+
+# 관찰·묘사 문단 판정에서 대사로 취급할 시작 문자
+_DIALOG_OPENERS = ('"', '“', "'", "‘", "「", "『")
+
+
+def diagnose_youth_target(text: str, character_bible: dict = None,
+                          is_youth: bool = True, ep_number: int = 0) -> dict:
+    """
+    A25(1020 경량화) + A26(무협 액기스) 정량 진단.
+
+    LLM 미사용 → 재현성 100%. 검출만 하고 수정하지 않는다.
+
+    Args:
+        text: 회차 본문
+        character_bible: 주인공 이름 추출용
+        is_youth: 1020 타깃 공식 여부 (A25 기준 적용 여부)
+        ep_number: 회차 번호 (1~2화면 A26 강하게 적용)
+
+    Returns:
+        {"metrics": {...}, "issues": [{"rule","label","detail"}], "clean": bool}
+    """
+    if not text or not isinstance(text, str):
+        return {"metrics": {}, "issues": [], "clean": True}
+
+    paras = [p.strip() for p in text.split("\n") if p.strip()]
+    if not paras:
+        return {"metrics": {}, "issues": [], "clean": True}
+
+    # 회차 제목 줄 제외
+    body_paras = [p for p in paras if not re.match(r"^\*?\*?EP\s*\d+", p)]
+
+    dialog_paras = [p for p in body_paras if p.startswith(_DIALOG_OPENERS)]
+    body_chars = sum(len(p) for p in body_paras) or 1
+    dialog_chars = sum(len(p) for p in dialog_paras)
+    dialog_ratio = round(100.0 * dialog_chars / body_chars, 1)
+
+    # 주인공 대사 수는 측정하지 않는다.
+    # 단역이 바이블에 없으면 화자 식별이 불가능해 추정치가 항상 과대 계상된다
+    # (사고 패턴 I: 측정 불가한 값을 숫자로 표시하면 그 자체가 거짓 신호).
+    # 대신 신뢰 계산이 가능한 대사 비율·대사 밀도로 같은 문제를 포착한다.
+    # A25의 "주인공 대사 12마디" 기준은 집필 프롬프트의 생성 지시로만 사용한다.
+
+    # 대사 밀도 (1,000자당 대사 문단 수) — 추정 없이 계산되는 신뢰 지표
+    dialog_density = round(1000.0 * len(dialog_paras) / body_chars, 1)
+
+    # 관찰·묘사 연속 문단 최대 길이
+    max_narration_run = 0
+    run = 0
+    for p in body_paras:
+        if p.startswith(_DIALOG_OPENERS) or p == "*":
+            run = 0
+        else:
+            run += 1
+            max_narration_run = max(max_narration_run, run)
+
+    # 무공 시전·격돌 검출
+    martial_hits = [w for w in _MARTIAL_ACTION_WORDS if w in text]
+    clash_hits = [w for w in _CLASH_WORDS if w in text]
+
+    metrics = {
+        "dialog_ratio": dialog_ratio,
+        "dialog_paragraphs": len(dialog_paras),
+        "dialog_density": dialog_density,
+        "max_narration_run": max_narration_run,
+        "martial_keywords": len(martial_hits),
+        "clash_keywords": len(clash_hits),
+        "total_chars": body_chars,
+    }
+
+    issues = []
+
+    if is_youth:
+        if dialog_ratio < 30:
+            issues.append({
+                "rule": "A25",
+                "label": "대사 비율 미달",
+                "detail": f"대사 글자 비율 {dialog_ratio}% (기준 30% 이상). "
+                          f"묘사 편중으로 1020 타깃 이탈 위험.",
+            })
+        if dialog_density < 8:
+            issues.append({
+                "rule": "A25",
+                "label": "대사 밀도 부족",
+                "detail": f"1,000자당 대사 문단 {dialog_density}개 (기준 8개 이상). "
+                          f"인물이 말하지 않고 서술자만 관찰하는 구조.",
+            })
+        if max_narration_run >= 4:
+            issues.append({
+                "rule": "A25",
+                "label": "관찰·묘사 문단 연속",
+                "detail": f"묘사 문단 최대 {max_narration_run}개 연속 "
+                          f"(기준 3개 미만). 대사·행동을 끼울 것.",
+            })
+
+    if len(martial_hits) < 2:
+        issues.append({
+            "rule": "A26",
+            "label": "무협 액기스 부족",
+            "detail": f"무공·경지·내공 관련 표현 {len(martial_hits)}종 검출 "
+                      f"(기준 2종 이상). 초식명 명시 시전이 필요.",
+        })
+    if not clash_hits and ep_number in (1, 2):
+        issues.append({
+            "rule": "A26",
+            "label": "격돌·타격 부재",
+            "detail": "무기 격돌 또는 실제 타격 묘사가 검출되지 않음. "
+                      "검이 뽑히고 부딪히지 않는 1화는 장르 계약 위반.",
+        })
+
+    return {"metrics": metrics, "issues": issues, "clean": not issues}
+
+
+def format_youth_diagnosis_report(diag: dict, ep_number: int = 0) -> str:
+    """1020 타깃·장르 진단 결과를 작가용 마크다운으로 변환."""
+    if not diag or not diag.get("metrics"):
+        return "진단 대상 본문이 없습니다."
+
+    m = diag["metrics"]
+    lines = [f"### 🎯 1020 타깃·장르 진단" + (f" (EP{ep_number})" if ep_number else "")]
+    lines.append("")
+    lines.append("| 지표 | 측정값 | 기준 |")
+    lines.append("|---|---|---|")
+    lines.append(f"| 대사 글자 비율 | {m['dialog_ratio']}% | 30% 이상 |")
+    lines.append(f"| 대사 밀도 (1,000자당) | {m['dialog_density']}개 | 8개 이상 |")
+    lines.append(f"| 묘사 문단 최대 연속 | {m['max_narration_run']}개 | 3개 미만 |")
+    lines.append(f"| 무공·경지 표현 | {m['martial_keywords']}종 | 2종 이상 |")
+    lines.append(f"| 격돌·타격 표현 | {m['clash_keywords']}종 | 1종 이상 |")
+
+    if diag.get("clean"):
+        lines.append("\n✅ A25·A26 기준 통과")
+        return "\n".join(lines)
+
+    lines.append("")
+    for it in diag.get("issues", []):
+        lines.append(f"**[{it['rule']}] {it['label']}**")
+        lines.append(f"- {it['detail']}")
+
+    lines.append("\n> 진단은 검출만 합니다. 수정 여부와 방식은 작가의 판단입니다.")
     return "\n".join(lines)
 
 

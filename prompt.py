@@ -5,6 +5,38 @@
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.3.1 (2026-07-25) — Worldbuilding & Martial Registry
+  · build_world_setting_block() 신설 — 작가 세계관을 집필 단계에 주입
+    (기존에는 컨셉 카드에서 톤·유형·공식·장르만 추출하고
+     world_setting을 버려 세계관이 본문에 반영되지 않았음)
+  · build_martial_registry_block() 신설 — 초식 사전 누적 주입
+    (바이블 martial_system + 이전 회차 martial_showcase 누적)
+  · A26 확장 — EP1·EP2 한정 → 매 회차 무공 시전 의무
+  · A27 초식 일관성·설명 룰 신설
+    (같은 초식 같은 이름 / 신규 초식 4요소 설명 / 초식 인플레 방지)
+  · IdeaSeed 변환 스키마 보강 — tone_preset(enum) 및
+    world_setting.martial_level_system 필드 추가
+  · IdeaSeed 변환에 작가 설정 보존 규칙 추가 (고유명사 철자 유지)
+  · build_episode_plot_prompt / build_episode_write_prompt /
+    build_episode_redo_prompt에 세계관·초식 블록 연결
+  · prompt.py에 json import 추가 (기존에 없었음)
+
+v2.3.0 (2026-07-23) — Youth Target Pack (1020 학원무협 강화)
+  · A25 1020 타깃 경량화 룰 신설
+    (대사 비율 30%+ / 주인공 대사 12마디+ / 묘사 3연속 금지 /
+     유머 담당 기능 2회+ / 관찰 시점 고정 금지)
+  · A26 무협 액기스 선행 룰 신설
+    (초식명 명시 시전 1회+ / 격돌·타격 1회+ / 경지 노출 1회+ /
+     적이 스스로 물러나는 해결 금지)
+  · CLIFFHANGER_SUBJECT_RULE 신설 — 클리프행어 주인공 축 고정
+    (조연 내면·관찰로 회차를 닫는 구조 금지)
+  · EP1_OPENING_SPEC 신설 — 1화 오프닝 규격
+    (첫 문장 사건·대사 시작 / 첫 1,000자 3요소 / 사이다 지점 의무)
+  · YOUTH_TARGET_FORMULAS + is_youth_target() 신설 (F4·F3 판정)
+  · 플롯 출력 스키마 확장 — martial_showcase / catharsis_point /
+    humor_beat / cliffhanger.subject 필드 추가
+  · engine_validator.py 연동: A25·A26 정량 진단 신설
+
 v2.2.0 (2026-07-23) — Prose Style Scanner + Anti-Measurement Pack
   · A24 설정 재료 반복 상한 룰 신설
     (버릇·습관·말버릇·상징 소품의 회차당 출현 상한 명시)
@@ -50,12 +82,14 @@ v1.0 (2026-XX) — 초기 무협 엔진
   · A1~A20 AI 문체 탈출 규칙
 """
 
+import json
+
 # ═══════════════════════════════════════════════════
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.2.0"
-ENGINE_BUILD_DATE = "2026-07-23"
+ENGINE_VERSION = "v2.3.1"
+ENGINE_BUILD_DATE = "2026-07-25"
 
 # ═══════════════════════════════════════════════════
 # SYSTEM PROMPT — 무협 웹소설 작가 페르소나
@@ -1320,6 +1354,265 @@ CLIFFHANGER_REALITY_FILTER = """[클리프행어 상식 필터 — 반드시 준
 
 
 # ═══════════════════════════════════════════════════
+# 클리프행어 주체 룰 (v2.3.0 신규)
+# ═══════════════════════════════════════════════════
+
+CLIFFHANGER_SUBJECT_RULE = """[클리프행어 주체 룰 — v2.3.0]
+
+## 원칙: 클리프행어는 주인공 축에서 끝난다
+독자의 관심축은 주인공이다. 조연의 내면 독백이나 조연의
+정보 획득으로 회차를 닫으면 "다음 화가 궁금한 대상"이
+독자의 관심축과 어긋난다.
+
+❌ 조연이 비밀을 알아차리는 장면으로 끝내기
+   (독자는 "그 조연이 어쩔 건데?"를 궁금해하지 않는다)
+❌ 주인공이 모르는 정보를 조연만 알고 끝내기 — 1화에서는 특히 금지
+❌ 독자가 아직 무게를 모르는 고유명사 제시로 끝내기
+   (설정 정보 없이 이름만 던지면 임팩트 0)
+
+✅ 주인공이 무언가를 당하거나·결심하거나·선언하는 장면
+✅ 주인공에게 향하는 위협이 가시화되는 장면
+✅ 주인공의 다음 행동이 예고되는 장면
+✅ 조연 시점을 쓰려면 그 조연이 주인공에게 곧 개입할 것이
+   명확해야 한다 (관찰로 끝나면 안 된다)
+
+## 1020 타깃 (F4 학원무협·F3 시스템) 추가 규칙
+- "다음 화에 대결이 벌어진다"는 예고형이 가장 강하다
+- 정적 미스터리보다 동적 충돌 예고를 우선할 것
+- Challenge(선전포고)·Threat(위협)·Arrival(등장) 우선 검토
+"""
+
+
+# ═══════════════════════════════════════════════════
+# EP1 오프닝 규격 (v2.3.0 신규)
+# ═══════════════════════════════════════════════════
+
+EP1_OPENING_SPEC = """[EP1 오프닝 규격 — 1화 전용 의무 사항]
+
+## 첫 3줄 (가장 중요)
+- 첫 문장은 상태 설명이 아니라 사건·대사·동작으로 시작
+  (X) 정문 기둥에 A4 한 장이 붙어 있었다. → 정보 전달
+  (O) 대사로 시작 / 이미 벌어진 사건의 한복판으로 시작
+- 배경 설명은 사건 뒤에 흘려 넣을 것. 설명 먼저 금지.
+
+## 첫 1,000자 안에 반드시 들어갈 것
+1. 주인공의 목소리 (대사 최소 2마디 — 성격이 드러나는)
+2. 이 세계가 무협임을 보여주는 요소 (무공·경지·문파·병기)
+3. 서열 구조 (누가 위이고 누가 아래인가)
+
+## 1화 전체 필수 요소
+- 무공 시전 1회 이상 (A26) — 초식명 + 시각적 묘사
+- 사이다 지점 1회 이상 — 주인공의 행동으로 판이 뒤집히는 순간.
+  당하고 끝나거나 적이 스스로 물러나는 전개는 1화 실패다.
+- 주인공의 강함을 암시 또는 증명 (완전 공개는 불필요.
+  단, "아무 일도 일어나지 않았다"는 인상은 금지)
+- 동료 후보 1명과의 관계 시작 (대사 주고받기 3턴 이상)
+- 라이벌·적대자의 얼굴과 이름 제시
+
+## 학원 무협(F4) 1화 권장 배치
+1) 사건 한복판 오프닝 → 2) 주인공 등장·목소리 확립 →
+3) 서열·학원 상황 제시 → 4) 충돌 발생 →
+5) 주인공의 개입과 사이다 → 6) 다음 대결 예고 클리프행어
+"""
+
+
+# ═══════════════════════════════════════════════════
+# 1020 타깃 공식 목록 (A25 적용 판정용)
+# ═══════════════════════════════════════════════════
+
+YOUTH_TARGET_FORMULAS = ["F4_학원_무협", "F3_시스템_게임_무협"]
+
+
+def is_youth_target(concept_card):
+    """1020 타깃 공식인지 판정 (A25 적용 여부).
+
+    main/sub 공식 중 하나라도 F4·F3이면 True.
+    """
+    if not isinstance(concept_card, dict):
+        return False
+    keys = [
+        str(concept_card.get("wuxia_formula_main", "")),
+        str(concept_card.get("wuxia_formula_sub", "")),
+        str(concept_card.get("formula_key", "")),
+    ]
+    return any(k in YOUTH_TARGET_FORMULAS for k in keys)
+
+
+def _parse_characters_arg(characters):
+    """characters 인자를 dict로 정규화.
+
+    호출부에서 json.dumps된 문자열로 넘어오는 경우가 많다.
+    파싱 실패 시 빈 dict를 반환해 집필이 중단되지 않게 한다.
+    """
+    if isinstance(characters, dict):
+        return characters
+    if isinstance(characters, str) and characters.strip():
+        try:
+            parsed = json.loads(characters)
+            return parsed if isinstance(parsed, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+    return {}
+
+
+def build_world_setting_block(concept_card):
+    """작가의 세계관을 집필 단계로 전달하는 블록 (v2.3.1 신규).
+
+    기존에는 컨셉 카드에서 톤·주인공유형·공식·장르만 추출해 쓰고
+    world_setting을 버렸다. 그 결과 작가가 설계한 세계관이 본문
+    집필에 반영되지 않았다.
+    """
+    if not isinstance(concept_card, dict):
+        return ""
+    ws = concept_card.get("world_setting")
+    if not ws:
+        return ""
+
+    lines = ["## ⭐ 작품 고유 세계관 (작가 설정 — 임의 변경 금지)"]
+
+    if isinstance(ws, str):
+        lines.append(ws.strip())
+    elif isinstance(ws, dict):
+        label_map = {
+            "era": "시대·배경",
+            "location": "주요 장소",
+            "key_factions": "핵심 세력·문파",
+            "unique_rules": "이 세계만의 규칙",
+            "martial_level_system": "경지·무공 등급 체계",
+            "power_system": "무공 체계",
+            "social_structure": "사회 구조",
+        }
+        for key, val in ws.items():
+            if not val:
+                continue
+            label = label_map.get(key, key)
+            if isinstance(val, (list, tuple)):
+                val_txt = " / ".join(str(v) for v in val)
+            elif isinstance(val, dict):
+                val_txt = " / ".join(f"{k}: {v}" for k, v in val.items())
+            else:
+                val_txt = str(val)
+            lines.append(f"- **{label}**: {val_txt}")
+
+    # 세계관 준수 지시
+    lines.append("")
+    lines.append("### 세계관 준수 규칙")
+    lines.append("- 위 설정은 작가가 확정한 것이다. 새 세력·새 규칙을 임의로 만들지 말 것.")
+    lines.append("- 경지·등급 체계는 위 정의를 그대로 사용. 다른 이름으로 바꾸지 말 것.")
+    lines.append("- 이 세계만의 규칙이 회차 안에서 최소 1회 구체적으로 작동해야 한다.")
+    lines.append("  (설정을 배경으로만 두지 말고, 사건에 개입시킬 것)")
+
+    return "\n".join(lines)
+
+
+def build_martial_registry_block(character_bible, episode_plots=None,
+                                 current_ep=1):
+    """무공·초식 사전 블록 (v2.3.1 신규).
+
+    회차가 진행되면서 등장한 초식을 누적해 집필 프롬프트에 전달한다.
+    목적:
+      1) 초식 이름 일관성 — 같은 무공이 회차마다 다른 이름으로 나오는 것 방지
+      2) 설명 중복 방지 — 이미 설명한 초식을 매번 재설명하지 않게
+      3) 신규 초식 첫 등장 시 설명 의무 명시
+
+    Args:
+        character_bible: 캐릭터 바이블 (martial_system 필드 사용)
+        episode_plots: {ep: plot_dict} — 플롯의 martial_showcase 누적
+        current_ep: 현재 집필 회차 (이전 회차만 '기등장'으로 취급)
+    """
+    lines = ["## ⭐ 무공·초식 사전 (일관성 필수)"]
+
+    # 1) 바이블에 정의된 인물별 무공 체계
+    bible_entries = []
+    if isinstance(character_bible, dict):
+        def _walk(node):
+            if isinstance(node, dict):
+                nm = str(node.get("name", "")).split("(")[0].strip()
+                ms = node.get("martial_system")
+                if nm and ms:
+                    ms_txt = ms if isinstance(ms, str) else str(ms)
+                    bible_entries.append(f"- **{nm}**: {ms_txt}")
+                for v in node.values():
+                    _walk(v)
+            elif isinstance(node, list):
+                for v in node:
+                    _walk(v)
+        _walk(character_bible)
+
+    if bible_entries:
+        lines.append("")
+        lines.append("### 인물별 무공 체계 (바이블 확정)")
+        lines.extend(bible_entries[:12])
+
+    # 2) 이전 회차에서 이미 등장한 초식 (플롯의 martial_showcase 누적)
+    shown = []
+    if isinstance(episode_plots, dict):
+        for ep_key, plot in episode_plots.items():
+            try:
+                ep_no = int(ep_key)
+            except (TypeError, ValueError):
+                continue
+            if ep_no >= int(current_ep):
+                continue
+            if not isinstance(plot, dict):
+                continue
+            mv = plot.get("martial_showcase")
+            if mv and isinstance(mv, str) and mv.strip():
+                shown.append((ep_no, mv.strip()))
+    shown.sort()
+
+    if shown:
+        lines.append("")
+        lines.append("### 이미 등장한 초식 (이름을 그대로 사용할 것)")
+        for ep_no, mv in shown[-15:]:
+            lines.append(f"- EP{ep_no}: {mv}")
+
+    # 3) 운용 규칙
+    lines.append("")
+    lines.append("### 초식 운용 규칙 (A27)")
+    lines.append("- 위 목록에 있는 초식은 **이름을 바꾸지 말 것**. 같은 무공은 같은 이름으로.")
+    lines.append("- 이미 설명한 초식은 재설명하지 말 것. 이름 + 효과만 짧게.")
+    lines.append("- **신규 초식을 처음 쓸 때는 반드시 설명한다**:")
+    lines.append("  · 초식 이름 (한자 3~5자 간결, 첫 등장만 한자 병기)")
+    lines.append("  · 어떤 원리·계보의 무공인가 (1~2문장)")
+    lines.append("  · 시각적으로 어떻게 보이는가 (2~3문장)")
+    lines.append("  · 대가·한계가 있는가 (있으면 1문장)")
+    lines.append("- 이번 회차에 새로 만든 초식은 다음 회차부터 위 목록처럼 고정된다.")
+    lines.append("  즉흥적으로 만들고 잊지 말 것.")
+
+    return "\n".join(lines)
+
+
+def _youth_plot_directive(concept_card):
+    """1020 타깃 공식일 때만 붙는 플롯 설계 지시."""
+    if not is_youth_target(concept_card):
+        return ""
+    return """## ⭐ 1020 타깃 플롯 설계 지시 (A25·A26)
+- 씬마다 대사 주고받기가 실제로 발생하도록 설계할 것.
+  인물이 관찰만 하는 씬은 만들지 말 것.
+- 무공 시전 씬을 최소 1개 배치 (martial_showcase 필드 필수 기입)
+- 사이다 지점을 명시 (catharsis_point) — 주인공의 행동이
+  결과를 만들어야 한다. 적이 스스로 물러나는 해결 금지.
+- 경쾌·유머 담당 인물의 기능 지점 배치 (humor_beat)
+- 클리프행어는 주인공 축, 가능하면 대결 예고형
+"""
+
+
+def _youth_write_directive(concept_card):
+    """1020 타깃 공식일 때만 붙는 집필 지시 (A25 정량 기준)."""
+    if not is_youth_target(concept_card):
+        return ""
+    return """- ⭐ 1020 타깃 정량 기준 (A25) — 아래는 권고가 아니라 하한선
+  · 대사 글자 비율 30% 이상
+  · 주인공 대사 12마디 이상
+  · 관찰·묘사 문단 3개 연속 금지 (대사·행동을 끼울 것)
+  · 경쾌·유머 담당 인물 기능 수행 2회 이상
+- ⭐ 무협 액기스 (A26) — 초식명 명시 무공 시전 1회 이상,
+  무기 격돌 또는 타격 1회 이상, 경지·내공 노출 1회 이상
+"""
+
+
+# ═══════════════════════════════════════════════════
 # 독자 페르소나 5종 (무협 전용)
 # ═══════════════════════════════════════════════════
 
@@ -1547,12 +1840,14 @@ RATING_CONVERSION_RULES = """[19금 → 15금 변환 규칙 — 무협 특화]
 
 
 # ═══════════════════════════════════════════════════
-# AI 문체 탈출 규칙 A1~A24 (무협 특화)
+# AI 문체 탈출 규칙 A1~A27 (무협 특화)
 # v2.1.0: A21 1차/2차 위기 구조 + A22 첫 장면 9유형 추가
 # v2.2.0: A23 계측·관찰 리포트체 금지 + A24 설정 재료 반복 상한 추가
+# v2.3.0: A25 1020 타깃 경량화 + A26 무협 액기스 선행 추가
+# v2.3.1: A26 매 회차 적용으로 확장 + A27 초식 일관성·설명 룰 추가
 # ═══════════════════════════════════════════════════
 
-AI_ANTI_PATTERN = """[AI 문체 탈출 규칙 — 무협 A1~A24]
+AI_ANTI_PATTERN = """[AI 문체 탈출 규칙 — 무협 A1~A27]
 
 ## 범용 규칙 (A1~A14)
 A1. "모든"·"마침내"·"절대로" 남발 금지
@@ -1643,6 +1938,56 @@ A24. 설정 재료 반복 상한 (버릇·말버릇·습관·소지품)
     회차당 최대 2회. 매 장면 소품을 만지작거리게 하지 말 것.
   - 같은 표현의 재등장은 간격을 벌릴수록 강해진다.
     반복은 리듬이 아니라 마모다.
+
+## 타깃·장르 룰 (A25~A27) ⭐⭐⭐ — v2.3.0~v2.3.1
+
+A25. 1020 타깃 경량화 (F4 학원무협·F3 시스템 무협 의무)
+  10~20대 독자는 "관찰"이 아니라 "체험"을 원한다. 정적 묘사로
+  분위기를 쌓는 문예 문체는 이 타깃에서 이탈을 만든다.
+  - 대사 글자 비율 30% 이상 (지문:대사 = 7:3 최소, 6:4 권장).
+    묘사만 이어지는 원고는 1020 타깃에서 실패한다.
+  - 주인공 대사 회차당 12마디 이상. 무표정·침묵으로 쿨함을
+    표현하지 말 것. 쿨함은 "말수 없음"이 아니라 "말의 태도"다.
+    (X) 대답하지 않았다 / 대답은 하지 않았다 (반복 금지)
+    (O) 짧고 건조하지만 분명한 대사로 응수
+  - 관찰·묘사 문단 3개 연속 금지. 반드시 대사나 행동을 끼울 것.
+  - 경쾌·유머 담당 인물이 회차당 최소 2회 기능 수행.
+    (당하는 역할만 하는 조연은 유머 담당이 아니다)
+  - 서술자가 인물 위에서 관찰하는 시점 고정 금지.
+    주인공의 감각·판단·속마음에 밀착할 것.
+  - 문장이 짧은 것과 템포가 빠른 것은 다르다. 템포는
+    사건이 얼마나 자주 바뀌는가로 결정된다.
+
+A26. 무협 액기스 (전 공식 매 회차 의무 / EP1·EP2 특히 엄격)
+  무협 독자는 매 회차에서 "무협을 읽고 있다"는 확인을 원한다.
+  분위기만 쌓고 무공이 나오지 않는 회차는 장르 계약 위반이다.
+  - 무공 시전 최소 1회. 초식·무공 이름을 명시하고 시각적으로
+    3문장 이상 묘사할 것. 이름 없는 몸싸움은 시전이 아니다.
+  - 무기 격돌 또는 실제 타격 1회 이상. 검이 뽑히고 부딪히지
+    않은 채 상황이 종료되는 전개 금지.
+  - 경지·내공 체계를 대사나 묘사로 최소 1회 노출.
+  - 적이 스스로 물러나는 방식으로 갈등을 끝내지 말 것.
+    주인공의 행동이 결과를 만들어야 카타르시스가 생긴다.
+  - 문파·학원의 무학 특색(무엇을 가르치고 무엇이 다른가)을
+    구체적으로 제시.
+  - 예외: 순수 감정 회차·일상 회차에서도 최소 무공 언급 1회는
+    유지할 것 (완전 부재 금지).
+
+A27. 초식 일관성·설명 룰 (매 회차)
+  50화를 관통하는 무공 체계의 일관성은 무협의 신뢰도를 만든다.
+  회차마다 이름이 바뀌는 무공은 독자를 이탈시킨다.
+  - 이미 등장한 초식은 **같은 이름**으로 쓸 것. 유사 표현으로
+    바꾸지 말 것. (X) 경천미러 → 반사경천 → 미러링
+  - 이미 설명한 초식은 재설명 금지. 이름 + 효과만 짧게 처리.
+  - 신규 초식 첫 등장 시 4요소 설명 의무:
+    ① 이름 (한자 3~5자, 첫 등장만 한자 병기)
+    ② 원리·계보 (1~2문장)
+    ③ 시각적 형상 (2~3문장)
+    ④ 대가·한계 (있으면 1문장)
+  - 즉흥 작명 금지. 새로 만든 초식은 그 작품의 자산으로 고정된다.
+  - 경지 체계는 작가가 확정한 이름만 사용. 새 등급을 만들지 말 것.
+  - 초식 인플레 주의: 회차마다 새 초식을 남발하면 기존 초식의
+    무게가 사라진다. 신규 초식은 서사적 이유가 있을 때만.
 """
 
 
@@ -2464,12 +2809,21 @@ JSON만 반환."""
 
 def build_episode_plot_prompt(arc_block, plant_map, ep_number,
                               concept_card, prev_summaries="",
-                              producer_note=""):
-    """회차 플롯 생성."""
+                              producer_note="", character_bible=None,
+                              episode_plots=None):
+    """회차 플롯 생성.
+
+    v2.3.1: 초식 사전 주입 — 이미 등장한 초식을 알고 설계하도록.
+    """
+    martial_block = build_martial_registry_block(
+        _parse_characters_arg(character_bible), episode_plots, ep_number
+    )
     return f"""{_pn_block(producer_note)}
 
 ## 컨셉 카드 (요약)
 {concept_card}
+
+{martial_block}
 
 ## 이번 회차 비트
 {arc_block}
@@ -2486,6 +2840,12 @@ def build_episode_plot_prompt(arc_block, plant_map, ep_number,
 
 {NARRATIVE_FUNCTION_CHECK}
 
+{CLIFFHANGER_SUBJECT_RULE}
+
+{EP1_OPENING_SPEC if ep_number in (1, 2) else ""}
+
+{_youth_plot_directive(concept_card)}
+
 EP{ep_number}의 상세 플롯을 작성하세요.
 
 ## 출력 형식
@@ -2493,7 +2853,7 @@ EP{ep_number}의 상세 플롯을 작성하세요.
 {{
   "ep": {ep_number},
   "title": "회차 제목",
-  "opening_hook": "첫 3줄 훅 원안",
+  "opening_hook": "첫 3줄 훅 원안 (사건·대사·동작으로 시작. 상태 설명 금지)",
   "scenes": [
     {{
       "scene_no": 1,
@@ -2507,8 +2867,12 @@ EP{ep_number}의 상세 플롯을 작성하세요.
     ...
   ],
   "midpoint_shift": "중간 전환점",
+  "martial_showcase": "이번 화 무공 시전 (초식명 + 누가 누구에게 + 시각 포인트). 없으면 빈 문자열",
+  "catharsis_point": "사이다 지점 — 주인공의 행동으로 판이 뒤집히는 순간",
+  "humor_beat": "경쾌·유머 담당 인물의 기능 지점 (1020 타깃 시 필수)",
   "cliffhanger": {{
-    "type": "Reveal / Threat / ...",
+    "type": "Reveal / Threat / Challenge / ...",
+    "subject": "주인공 / 조연 — 원칙적으로 주인공",
     "content": "훅 원안 (3~5줄)"
   }},
   "plants_placed": [],
@@ -2522,8 +2886,14 @@ JSON만 반환. 씬은 3~4개 엄수."""
 def build_episode_write_prompt(episode_plot, characters, style_dna,
                                ep_number, rating="19금",
                                platform="문피아", producer_note="",
-                               concept_card=None, profession_blocks=""):
-    """회차 본문 집필."""
+                               concept_card=None, profession_blocks="",
+                               episode_plots=None):
+    """회차 본문 집필.
+
+    v2.3.1: 세계관 블록·초식 사전 블록 주입
+      - episode_plots: {ep: plot} 전체. 이전 회차의 martial_showcase를
+        누적해 초식 이름 일관성을 유지하는 데 사용.
+    """
     plen = get_platform_length(platform)
     target_len = plen["target"]
 
@@ -2535,6 +2905,12 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
     ptype_block = get_protagonist_type_block(protagonist_type_key)
     formula_block = get_formula_block(formula_key) if formula_key else ""
     genre_rules = get_genre_rules_block(detect_genre_key(concept_card.get("genre", "") if concept_card else ""))
+
+    # v2.3.1: 작가 세계관 + 초식 사전
+    world_block = build_world_setting_block(concept_card)
+    martial_block = build_martial_registry_block(
+        _parse_characters_arg(characters), episode_plots, ep_number
+    )
 
     return f"""{_pn_block(producer_note)}
 
@@ -2550,6 +2926,10 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
 {profession_blocks}
 
 {WUXIA_CLASSIC_WORLDBUILDING}
+
+{world_block}
+
+{martial_block}
 
 {formula_block}
 
@@ -2572,6 +2952,10 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
 
 {CLIFFHANGER_REALITY_FILTER}
 
+{CLIFFHANGER_SUBJECT_RULE}
+
+{EP1_OPENING_SPEC if ep_number in (1, 2) else ""}
+
 {_rating_block(rating)}
 
 {_style_block(style_dna, "중")}
@@ -2587,9 +2971,9 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
 - 플롯의 3~4씬을 본문으로 확장
 - 회차 제목으로 시작 (EP{ep_number}. [제목])
 - 본문은 장면 전환 시 빈 줄로 구분
-- 마지막 2~3줄은 명확한 클리프행어
+- 마지막 2~3줄은 명확한 클리프행어 (주인공 축에서 닫을 것)
 - 고어체·한자 병기·사자성어 규칙 엄수
-
+{_youth_write_directive(concept_card)}
 본문만 작성하세요. 메타 설명·JSON 없이 순수 본문."""
 
 
@@ -2658,7 +3042,8 @@ def build_quality_check_prompt(episode_text, episode_number, characters, concept
 4. 고어체 오남용 (재하·소생·본좌 등)
 5. 한자 병기 규칙 (첫 등장만)
 6. 사자성어 남발
-7. AI 문체 흔적 (A1~A24) — 특히 A23 계측·리포트체, A24 버릇 반복
+7. AI 문체 흔적 (A1~A27) — 특히 A23 계측·리포트체, A24 버릇 반복,
+   A25 대사 비율, A26 무공 시전 유무, A27 초식 이름 일관성
 
 ### C. 서사
 8. 오프닝 훅 (첫 3줄)
@@ -3523,6 +3908,21 @@ def build_wuxia_ideaseed_to_concept_prompt(ideaseed_json_str, pending_decisions_
 ## 주요 무협 모티프 (예시)
 {motifs_brief}
 
+## 사용 가능한 톤 프리셋 (tone_preset — 정확히 1개 선택)
+{list(NARRATIVE_TONE_PRESETS.keys())}
+
+## ⭐ 작가 설정 보존 규칙 (반드시 준수)
+- IdeaSeed에 작가가 이미 설계한 내용은 **요약하거나 재해석하지 말고 보존**할 것.
+  특히 world_setting(시대·장소·세력·고유 규칙·경지 체계)과
+  인물의 무공 체계는 원문의 구체성을 유지한다.
+- 작가가 만든 고유명사(문파명·초식명·조직명·경지 이름)는
+  철자 그대로 옮길 것. 유사어로 바꾸지 말 것.
+- IdeaSeed에 없는 세계관 요소를 새로 발명하지 말 것.
+  비어 있으면 빈 문자열로 두고 작가 결정 사항으로 표시한다.
+- tone_preset은 위 목록의 키 중 하나여야 한다. 목록에 없는
+  표현을 쓰면 엔진이 톤 블록을 주입하지 못한다.
+  (narrative_tone은 자유 서술 가능. tone_preset은 enum 고정.)
+
 ## 출력 JSON 스키마
 
 다음 형식으로 컨셉 카드를 생성하세요:
@@ -3543,6 +3943,7 @@ def build_wuxia_ideaseed_to_concept_prompt(ideaseed_json_str, pending_decisions_
     "tertiary": ["부가 모티프1"]
   }},
   "narrative_tone": "K-웹툰무협 / 정통무협 / 학원무협 등",
+  "tone_preset": "톤 프리셋 키 (아래 목록에서 정확히 1개 — 자유 서술 금지)",
   "work_orientation": "male / female / neutral",
   "protagonist": {{
     "name": "주인공 이름",
@@ -3569,7 +3970,8 @@ def build_wuxia_ideaseed_to_concept_prompt(ideaseed_json_str, pending_decisions_
     "era": "시대 (예: 명말청초·가상 왕조·현대 학원 무협)",
     "location": "주요 무대",
     "key_factions": ["문파/세력1", "문파/세력2"],
-    "unique_rules": "독특한 세계관 규칙 (시스템·회귀·각성 등)"
+    "unique_rules": "독특한 세계관 규칙 (시스템·회귀·각성 등)",
+    "martial_level_system": "경지·무공 등급 체계 (작가 설정이 있으면 그대로 보존)"
   }},
   "core_themes": ["주제1", "주제2"],
   "target_audience": {{
@@ -3756,6 +4158,7 @@ def build_episode_redo_prompt(
     concept_dict,
     character_bible_str,
     prose_scan_report="",
+    episode_plots=None,
 ):
     """검수 결과 점수 미달 시 재집필 프롬프트.
 
@@ -3818,6 +4221,10 @@ def build_episode_redo_prompt(
 
 ## 캐릭터 바이블 (요약)
 {character_bible_str[:1500]}
+
+{build_world_setting_block(concept_dict)}
+
+{build_martial_registry_block(_parse_characters_arg(character_bible_str), episode_plots, ep_number)}
 
 ## 재집필 지침
 1. **회차의 핵심 사건은 유지**하되, 약점을 보완해 재집필

@@ -1,9 +1,27 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.2.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.3.1 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.3.1 (2026-07-25) — Worldbuilding & Martial Registry + Restore Fix
+  · [수정] 프로젝트 복원 시 회차 키 타입 불일치 해결
+    — JSON은 문자열 키("1"), session_state는 정수 키(1)를 쓰는데
+      변환이 없어 복원 후 플롯·본문·검수가 사라진 것처럼 보였음
+    — _normalize_episode_keys() 추가로 복원 시 정수 변환
+  · 플롯·집필·재집필 호출에 character_bible / episode_plots 전달
+    — 세계관 블록과 초식 사전이 매 회차 주입되도록 연결
+  · prompt.py 연동: A26 매 회차 확장, A27 초식 일관성 룰,
+    IdeaSeed 변환 스키마에 tone_preset·경지 체계 필드 추가
+
+v2.3.0 (2026-07-23) — Youth Target Pack (1020 학원무협 강화)
+  · 1020 타깃·장르 진단 UI 신설 (A25·A26, API 미사용)
+    — 대사 비율·대사 밀도·묘사 연속·무공/격돌 표현을 표로 표시
+    — 1~2화에서 미달 시 자동 펼침 (오프닝 품질 조기 경보)
+  · REDO 재집필 시 문체 스캐너 + 1020 진단 결과를 함께 주입
+  · prompt.py 연동: A25·A26 룰, EP1 오프닝 규격,
+    클리프행어 주인공 축 룰, 플롯 스키마 확장
+
 v2.2.0 (2026-07-23) — Prose Style Scanner + Anti-Measurement Pack
   · 문체 스캐너 UI 신설 — 본문 존재 시 자동 실행 (API 미사용, 무료)
     — A23 계측·리포트체 + A24 설정 재료 반복을 정적 검출
@@ -147,6 +165,8 @@ from prompt import (
     # v2.1.0 신규
     ROMANCE_FORMULAS,
     get_romance_formula_block,
+    # v2.3.0 신규
+    is_youth_target,
 )
 from profession_pack import (
     PROFESSION_PACK,
@@ -169,6 +189,8 @@ from engine_validator import (
     summarize_cumulative_25,
     scan_prose_style,               # v2.2.0 신규
     format_prose_scan_report,       # v2.2.0 신규
+    diagnose_youth_target,          # v2.3.0 신규
+    format_youth_diagnosis_report,  # v2.3.0 신규
 )
 
 
@@ -610,6 +632,9 @@ PROJECT_KEYS = [
     "plant_map_core", "plant_map_extension", "character_bible",
     "episode_plots", "episodes_19", "episodes_15",
     "episode_summaries", "quality_reports",
+    # v2.3.1: 5축 검수 결과도 백업에 포함 — 누락 시 복원 후
+    # 25화 누적 대시보드가 초기화됨
+    "validation_results",
     "producer_note", "style_dna", "style_strength", "brief_text",
 ]
 
@@ -679,12 +704,41 @@ def build_project_snapshot():
     return snapshot
 
 
+def _normalize_episode_keys(value):
+    """회차 딕셔너리의 키를 정수로 통일한다 (v2.3.1).
+
+    session_state는 정수 키(1)를 쓰지만 JSON 저장·복원을 거치면
+    문자열 키("1")로 바뀐다. 변환하지 않으면 복원 후 회차 선택이
+    데이터를 찾지 못해 플롯·본문·검수 결과가 사라진 것처럼 보인다.
+    (webnovel-engine의 _normalize_keys() 패턴과 동일)
+    """
+    if not isinstance(value, dict):
+        return value
+    out = {}
+    for k, v in value.items():
+        try:
+            out[int(k)] = v
+        except (TypeError, ValueError):
+            out[k] = v  # 회차 키가 아닌 항목은 그대로 보존
+    return out
+
+
+# 회차 번호를 키로 쓰는 세션 항목 (복원 시 정수 변환 대상)
+EPISODE_KEYED_KEYS = [
+    "episode_plots", "episodes_19", "episodes_15",
+    "episode_summaries", "quality_reports", "validation_results",
+]
+
+
 def restore_project_snapshot(data):
     if not isinstance(data, dict):
         return False
     for k in PROJECT_KEYS:
         if k in data:
-            st.session_state[k] = data[k]
+            val = data[k]
+            if k in EPISODE_KEYED_KEYS:
+                val = _normalize_episode_keys(val)
+            st.session_state[k] = val
     return True
 
 
@@ -1366,6 +1420,8 @@ with tab3:
                                 json.dumps(st.session_state.concept_card, ensure_ascii=False),
                                 prev_summaries=prev_summaries,
                                 producer_note=st.session_state.producer_note,
+                                character_bible=st.session_state.character_bible,
+                                episode_plots=st.session_state.episode_plots,
                             ),
                             max_tokens=MAX_TOKENS_STRUCTURE,
                         )
@@ -1397,6 +1453,7 @@ with tab3:
                                 producer_note=st.session_state.producer_note,
                                 concept_card=st.session_state.concept_card,
                                 profession_blocks=profession_blocks,
+                                episode_plots=st.session_state.episode_plots,
                             ),
                             max_tokens=MAX_TOKENS_EPISODE,
                         )
@@ -1627,6 +1684,24 @@ with tab3:
                 with st.expander(scan_label, expanded=False):
                     st.markdown(format_prose_scan_report(prose_scan, ep_number=selected_ep))
 
+                # ──── 1020 타깃·장르 진단 (v2.3.0 — 정적 검출, API 미사용) ────
+                _is_youth = is_youth_target(st.session_state.concept_card)
+                youth_diag = diagnose_youth_target(
+                    current_ep,
+                    st.session_state.character_bible,
+                    is_youth=_is_youth,
+                    ep_number=selected_ep,
+                )
+                diag_label = (
+                    "🎯 1020 타깃·장르 진단 — ✅ 통과"
+                    if youth_diag["clean"]
+                    else f"🎯 1020 타깃·장르 진단 — ⚠️ {len(youth_diag['issues'])}개 미달"
+                )
+                with st.expander(diag_label, expanded=(not youth_diag["clean"] and selected_ep <= 2)):
+                    if not _is_youth:
+                        st.caption("1020 타깃 공식(F4 학원·F3 시스템)이 아니므로 A25 기준은 적용하지 않습니다.")
+                    st.markdown(format_youth_diagnosis_report(youth_diag, ep_number=selected_ep))
+
                 # 검수 결과 표시
                 if selected_ep in st.session_state.validation_results:
                     val_result = st.session_state.validation_results[selected_ep]
@@ -1672,11 +1747,24 @@ with tab3:
                         ):
                             with st.spinner("약점 보완 재집필 중... (Opus 사용)"):
                                 # v2.2.0: 문체 스캐너 검출 결과를 REDO 프롬프트에 주입
+                                # v2.3.0: 1020 타깃·장르 진단 결과도 함께 주입
                                 redo_scan = scan_prose_style(current_ep, st.session_state.character_bible)
-                                redo_scan_report = (
-                                    "" if redo_scan["clean"]
-                                    else format_prose_scan_report(redo_scan, ep_number=selected_ep)
+                                redo_parts = []
+                                if not redo_scan["clean"]:
+                                    redo_parts.append(
+                                        format_prose_scan_report(redo_scan, ep_number=selected_ep)
+                                    )
+                                redo_diag = diagnose_youth_target(
+                                    current_ep,
+                                    st.session_state.character_bible,
+                                    is_youth=is_youth_target(st.session_state.concept_card),
+                                    ep_number=selected_ep,
                                 )
+                                if not redo_diag["clean"]:
+                                    redo_parts.append(
+                                        format_youth_diagnosis_report(redo_diag, ep_number=selected_ep)
+                                    )
+                                redo_scan_report = "\n\n".join(redo_parts)
                                 redo_text = call_claude_opus(
                                     build_episode_redo_prompt(
                                         current_ep,
@@ -1685,6 +1773,7 @@ with tab3:
                                         st.session_state.concept_card,
                                         json.dumps(st.session_state.character_bible, ensure_ascii=False),
                                         prose_scan_report=redo_scan_report,
+                                        episode_plots=st.session_state.episode_plots,
                                     ),
                                     max_tokens=MAX_TOKENS_EPISODE,
                                 )
