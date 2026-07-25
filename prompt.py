@@ -5,6 +5,33 @@
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.4.0 (2026-07-25) — Brief Material Containers (기획서 재료 그릇)
+  · [사고 원인] 기획서 20,908자 중 12,000자만 앞·뒤 발췌하고,
+    발췌된 내용조차 담을 필드가 없어 별첨(무공·기보·무기)·
+    스토리라인이 전량 소실. LLM이 빈 필드를 관용구로 창작.
+  · extract_brief_sections() 신설 — 기획서를 섹션 단위로 분해
+    (개요/로그라인/기획의도/세계관/캐릭터/시놉시스/스토리라인/
+     회차/별첨) — 표 헤더·제목행 인식
+  · compress_brief_for_prompt() 신설 — 단순 앞뒤 절단 폐기.
+    섹션별 가중 예산 배분 압축. 용도별 우선순위 지정 가능
+  · build_martial_bible_prompt() 신설 — 초식 바이블 추출
+    (무공 분류 / 유파별 초식 / 기보·영물 / 무기 / 금기·대가)
+  · build_storyline_extract_prompt() 신설 — 막 구조 스토리라인 추출
+  · build_martial_bible_block() 신설 — 초식 바이블을 플롯·집필·
+    재집필에 주입
+  · build_martial_registry_block() 배선 수정 — martial_bible을
+    1순위 소스로 사용. (v2.3.1은 character_bible.martial_system을
+    읽었으나 캐릭터 바이블 스키마에 해당 필드를 요구하는 지시가
+    없어 항상 빈 구역이었음 — 사고 패턴 L)
+  · build_world_setting_block() 확장 — factions·competition_rules 반영
+  · build_parse_brief_prompt() 스키마 확장
+    — world_setting.factions[] (문파·학교별 역사·위치·수련법·문화)
+    — world_setting.martial_level_system
+    — competition_rules (대회 형식·판정·실격·상금)
+    — key_supporting_chars 최대 12명으로 확대 (기존 실질 5명)
+  · A28 작가 설정 우선 룰 신설 — 기획서에 있는 고유명사·초식명은
+    변경 금지, 없는 것은 창작 금지
+
 v2.3.1 (2026-07-25) — Worldbuilding & Martial Registry
   · build_world_setting_block() 신설 — 작가 세계관을 집필 단계에 주입
     (기존에는 컨셉 카드에서 톤·유형·공식·장르만 추출하고
@@ -88,7 +115,7 @@ import json
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.3.1"
+ENGINE_VERSION = "v2.4.0"
 ENGINE_BUILD_DATE = "2026-07-25"
 
 # ═══════════════════════════════════════════════════
@@ -1455,6 +1482,209 @@ def _parse_characters_arg(characters):
     return {}
 
 
+# ══════════════════════════════════════════════════════════════
+# v2.4.0 기획서 섹션 인식 압축
+# ──────────────────────────────────────────────────────────────
+# [사고 원인] v2.3.1까지는 12,000자 초과 기획서를
+#   head(10,000) + tail(2,000)로 잘라냈다. 아미고 기획서는
+#   20,908자였고, 잘려나간 가운데 9,000여 자가 정확히
+#   스토리라인 전체(오프닝·축지법 등교·정체 각성·결승 폭로)와
+#   별첨 앞부분이었다. 그 결과 EP1 오프닝이 백지가 되었다.
+# 대안: 섹션을 인식해 용도별 가중 예산으로 배분한다.
+# ══════════════════════════════════════════════════════════════
+
+BRIEF_SECTION_KEYS = [
+    ("overview",  ["개요", "INFORMATION", "기본정보", "기본 정보", "작품정보"]),
+    ("logline",   ["로그라인", "LOGLINE", "한줄요약"]),
+    ("intent",    ["기획의도", "기획 의도", "KEY POINTS", "KEYPOINTS", "기획포인트"]),
+    ("world",     ["세계관", "WORLD-BUILDING", "WORLDBUILDING", "WORLD BUILDING",
+                   "배경설정", "배경 설정"]),
+    ("character", ["캐릭터", "CHARACTER", "등장인물", "인물소개", "인물 소개"]),
+    ("synopsis",  ["시놉시스", "SYNOPSIS", "줄거리", "시놉"]),
+    ("storyline", ["스토리라인", "STORYLINE", "STORY LINE", "트리트먼트",
+                   "TREATMENT", "막구조", "막 구조", "구성"]),
+    ("episodes",  ["회차구성", "회차 구성", "회차별", "EPISODE", "에피소드"]),
+    ("appendix",  ["별첨", "APPENDIX", "부록", "설정집", "무공설정", "무공 설정"]),
+]
+
+# 용도별 섹션 가중치 (합이 1이 아니어도 됨 — 비율로만 사용)
+BRIEF_PRIORITY_PROFILES = {
+    # 컨셉 카드: 인물·세계관·개요 중심
+    "concept": {
+        "overview": 1.0, "logline": 1.0, "intent": 0.6,
+        "world": 1.6, "character": 2.4, "synopsis": 1.4,
+        "storyline": 0.8, "episodes": 0.6, "appendix": 1.0, "other": 0.4,
+    },
+    # 초식 바이블: 별첨·세계관 최우선
+    "martial": {
+        "overview": 0.2, "logline": 0.2, "intent": 0.1,
+        "world": 2.2, "character": 1.2, "synopsis": 0.6,
+        "storyline": 1.0, "episodes": 0.2, "appendix": 3.0, "other": 0.3,
+    },
+    # 스토리라인: 막 구조·시놉시스 최우선
+    "storyline": {
+        "overview": 0.3, "logline": 0.4, "intent": 0.2,
+        "world": 0.5, "character": 0.9, "synopsis": 2.0,
+        "storyline": 3.0, "episodes": 1.6, "appendix": 0.3, "other": 0.3,
+    },
+}
+
+
+def _is_section_header_line(line, used_keys=None):
+    """섹션 제목 행인지 판정하고, 맞으면 섹션 키를 반환.
+
+    기획서 DOCX는 섹션 제목을 표 헤더(| 세계관 | WORLD-BUILDING |)나
+    짧은 제목행([별첨] APPENDIX)으로 표기한다. 둘 다 인식한다.
+
+    [v2.4.0 주의 — 하위 제목 오인 방지]
+    스토리라인 섹션 안에는 "캐릭터 소개(Characters)" 같은 하위
+    제목이 등장한다. 이를 캐릭터 섹션의 재시작으로 오인하면
+    스토리라인 본문이 캐릭터 섹션으로 흘러든다. 기획서 섹션은
+    한 번씩 순서대로 나오므로, 이미 사용한 키로는 다시 전환하지
+    않는다.
+    """
+    raw = (line or "").strip()
+    if not raw or len(raw) > 60:
+        return None
+    # 표 구분선(| --- | --- |)은 무시
+    if set(raw.replace("|", "").replace("-", "").replace(" ", "")) == set():
+        return None
+
+    is_table_row = "|" in raw
+    # 표 형식이 아닌 제목행은 더 엄격하게 (본문 문장 오인 방지)
+    if not is_table_row and len(raw) > 30:
+        return None
+
+    probe = raw.replace("|", " ").replace("*", "").replace("#", "")
+    probe = probe.replace("[", " ").replace("]", " ").replace("★", " ")
+    probe_flat = probe.replace(" ", "").upper()
+    if not probe_flat:
+        return None
+
+    used = used_keys or set()
+    for key, keywords in BRIEF_SECTION_KEYS:
+        if key in used:
+            continue  # 이미 지나간 섹션 — 하위 제목으로 간주
+        for kw in keywords:
+            if kw.replace(" ", "").upper() in probe_flat:
+                return key
+    return None
+
+
+def extract_brief_sections(brief_text):
+    """기획서를 섹션 단위로 분해 (v2.4.0 신규).
+
+    Returns:
+        dict {section_key: text}. 어느 섹션에도 속하지 않는 앞부분·
+        중간 텍스트는 "other"에 누적한다. 섹션 제목이 전혀 없는
+        기획서는 전체가 "other"로 들어간다(안전 폴백).
+    """
+    sections = {}
+    current = "other"
+    used = set()
+    buf = []
+
+    def _flush():
+        if buf:
+            chunk = "\n".join(buf).strip()
+            if chunk:
+                sections[current] = (sections.get(current, "") + "\n\n" + chunk).strip()
+        buf.clear()
+
+    for line in (brief_text or "").splitlines():
+        hit = _is_section_header_line(line, used)
+        if hit:
+            _flush()
+            current = hit
+            used.add(hit)
+            continue
+        buf.append(line)
+    _flush()
+    return sections
+
+
+def compress_brief_for_prompt(brief_text, budget=12000, profile="concept"):
+    """섹션 인식 가중 압축 (v2.4.0 신규 — 단순 앞뒤 절단 대체).
+
+    각 섹션에 가중치 비례로 예산을 배분한다. 배분량보다 짧은
+    섹션은 전문을 보존하고, 남은 예산은 긴 섹션에 재분배한다.
+    최종적으로 예산을 넘는 섹션만 앞·뒤 발췌한다.
+
+    Args:
+        brief_text: 기획서 원문
+        budget: 프롬프트에 실을 총 글자 예산
+        profile: BRIEF_PRIORITY_PROFILES 키 ("concept"/"martial"/"storyline")
+
+    Returns:
+        (압축된 텍스트, 리포트 dict)
+    """
+    text = brief_text or ""
+    if len(text) <= budget:
+        return text, {"truncated": False, "total": len(text), "sections": {}}
+
+    weights = BRIEF_PRIORITY_PROFILES.get(profile, BRIEF_PRIORITY_PROFILES["concept"])
+    sections = extract_brief_sections(text)
+    if not sections:
+        sections = {"other": text}
+
+    # 1차 배분
+    active = {k: v for k, v in sections.items() if v.strip()}
+    total_weight = sum(weights.get(k, 0.3) for k in active) or 1.0
+    alloc = {k: int(budget * (weights.get(k, 0.3) / total_weight)) for k in active}
+
+    # 짧은 섹션의 잉여 예산을 회수해 재분배
+    surplus = 0
+    needy = []
+    for k, v in active.items():
+        if len(v) <= alloc[k]:
+            surplus += alloc[k] - len(v)
+            alloc[k] = len(v)
+        else:
+            needy.append(k)
+    if needy and surplus > 0:
+        needy_weight = sum(weights.get(k, 0.3) for k in needy) or 1.0
+        for k in needy:
+            alloc[k] += int(surplus * (weights.get(k, 0.3) / needy_weight))
+
+    # 섹션 순서는 기획서 원래 순서를 따른다
+    order = [k for k, _ in BRIEF_SECTION_KEYS] + ["other"]
+    label = {
+        "overview": "개요", "logline": "로그라인", "intent": "기획의도",
+        "world": "세계관", "character": "캐릭터", "synopsis": "시놉시스",
+        "storyline": "스토리라인", "episodes": "회차 구성",
+        "appendix": "별첨(무공·기보·무기)", "other": "기타",
+    }
+
+    out = []
+    report = {}
+    for k in order:
+        if k not in active:
+            continue
+        body = active[k].strip()
+        cap = max(alloc.get(k, 0), 0)
+        if len(body) > cap and cap > 400:
+            # 꼬리를 비례 확보한다. 스토리라인·별첨은 뒷부분에
+            # 클라이맥스·무기 목록이 오므로 꼬리가 짧으면 소실된다.
+            tail_len = max(300, min(1500, cap // 4))
+            head = body[: cap - tail_len]
+            tail = body[-tail_len:]
+            body = head + "\n[...이 섹션 일부 생략...]\n" + tail
+            report[k] = {"original": len(active[k]), "kept": len(body), "cut": True}
+        elif len(body) > cap:
+            body = body[:cap]
+            report[k] = {"original": len(active[k]), "kept": len(body), "cut": True}
+        else:
+            report[k] = {"original": len(active[k]), "kept": len(body), "cut": False}
+        out.append(f"===== [{label.get(k, k)}] =====\n{body}")
+
+    return "\n\n".join(out), {
+        "truncated": True,
+        "total": len(text),
+        "profile": profile,
+        "sections": report,
+    }
+
+
 def build_world_setting_block(concept_card):
     """작가의 세계관을 집필 단계로 전달하는 블록 (v2.3.1 신규).
 
@@ -1465,10 +1695,16 @@ def build_world_setting_block(concept_card):
     if not isinstance(concept_card, dict):
         return ""
     ws = concept_card.get("world_setting")
-    if not ws:
+    comp = concept_card.get("competition_rules")
+    has_comp = isinstance(comp, dict) and any(
+        isinstance(v, str) and v.strip() for v in comp.values()
+    )
+    if not ws and not has_comp:
         return ""
 
     lines = ["## ⭐ 작품 고유 세계관 (작가 설정 — 임의 변경 금지)"]
+    if not ws:
+        ws = {}
 
     if isinstance(ws, str):
         lines.append(ws.strip())
@@ -1482,6 +1718,28 @@ def build_world_setting_block(concept_card):
             "power_system": "무공 체계",
             "social_structure": "사회 구조",
         }
+        # v2.4.0: factions는 구조체 배열이므로 따로 렌더한다
+        facs = ws.get("factions")
+        if isinstance(facs, list) and facs:
+            lines.append("")
+            lines.append("### 문파·학원 설정 (작가 설정)")
+            for f in facs[:8]:
+                if not isinstance(f, dict):
+                    continue
+                nm = (f.get("name") or "").strip()
+                if not nm:
+                    continue
+                bits = []
+                for k, lb in (("location", "위치"), ("signature_art", "대표 무공"),
+                              ("training", "수련법"), ("culture", "문화"),
+                              ("history", "내력")):
+                    v = f.get(k)
+                    if isinstance(v, str) and v.strip():
+                        bits.append(f"{lb}: {v.strip()}")
+                mem = f.get("key_members")
+                if isinstance(mem, list) and mem:
+                    bits.append("주요 인물: " + ", ".join(str(m) for m in mem[:5]))
+                lines.append(f"- **{nm}**" + (f" — {' / '.join(bits)}" if bits else ""))
         for key, val in ws.items():
             if not val:
                 continue
@@ -1494,6 +1752,17 @@ def build_world_setting_block(concept_card):
                 val_txt = str(val)
             lines.append(f"- **{label}**: {val_txt}")
 
+    # v2.4.0: 대회 규칙 (학원 무협·대회 모티프 작품의 핵심 룰)
+    if has_comp:
+        lines.append("")
+        lines.append("### 대회 규칙 (작가 설정 — 판정 방식 변경 금지)")
+        for k, lb in (("name", "대회명"), ("format", "형식"),
+                      ("scoring", "판정"), ("disqualification", "실격"),
+                      ("prize", "상금")):
+            v = comp.get(k)
+            if isinstance(v, str) and v.strip():
+                lines.append(f"- {lb}: {v.strip()}")
+
     # 세계관 준수 지시
     lines.append("")
     lines.append("### 세계관 준수 규칙")
@@ -1505,8 +1774,399 @@ def build_world_setting_block(concept_card):
     return "\n".join(lines)
 
 
+def build_martial_bible_prompt(brief_text, concept_card=None):
+    """기획서 → 초식 바이블 추출 (v2.4.0 신규).
+
+    [왜 필요한가]
+    무협 기획서의 별첨(무공의 종류·기보·무기)은 작가가 설계한
+    핵심 자산이다. 그러나 v2.3.1까지 컨셉 카드 스키마에는 이를
+    담을 필드가 없어 전량 소실됐고, 그 결과 집필 단계에서 LLM이
+    무협 관용 초식명(자하신공·태극혼원공 등)을 창작해 넣었다.
+
+    이 함수는 별첨·세계관을 우선 확보한 압축 텍스트에서
+    초식 바이블을 추출한다. 창작은 금지다 — 없으면 빈 배열이다.
+    """
+    compressed, _report = compress_brief_for_prompt(
+        brief_text, budget=14000, profile="martial"
+    )
+
+    card_hint = ""
+    if isinstance(concept_card, dict) and concept_card:
+        keys = ["title", "logline", "genre", "formula_key", "wuxia_formula_main"]
+        picked = {k: concept_card.get(k) for k in keys if concept_card.get(k)}
+        if picked:
+            card_hint = (
+                "\n[이미 확정된 컨셉 카드 정보 — 참고용]\n"
+                + json.dumps(picked, ensure_ascii=False, indent=2) + "\n"
+            )
+
+    return f"""다음은 무협 작품 기획서입니다. 여기서 **무공·초식·기보·무기 설정만**
+추출해 초식 바이블 JSON으로 정리하세요.
+
+[기획서 (섹션별 발췌 — 별첨 우선 보존)]
+{compressed}
+{card_hint}
+[추출 지침 — 반드시 지킬 것]
+1. **기획서에 적힌 것만 추출한다.** 없는 무공·초식·기보를 창작하지 않는다.
+   해당 항목이 없으면 빈 배열([]) 또는 빈 문자열("")로 둔다.
+2. **고유명사는 원문 철자를 그대로 옮긴다.** 한자 병기가 있으면 함께 옮긴다.
+   예: 화산장풍(花山掌風), 당랑연검술(螳螂軟劍術), 아미자(阿美刺)
+   무협 관용 명칭으로 바꾸지 않는다. 작가가 일부러 다른 한자를 쓴
+   경우가 있으므로(華山 → 花山 등) 원문을 존중한다.
+3. 기획서에 설명이 있는 항목만 4요소(원리·시각·대가)를 채운다.
+   설명이 없으면 그 필드만 빈 문자열로 두고 이름은 살린다.
+4. 경지·등급 체계가 기획서에 없으면 martial_level_system을 빈
+   문자열로 둔다. **경지 체계를 임의로 만들어 넣지 않는다.**
+   (내공/외공 분류로 강약을 표현하는 작품도 있다.)
+5. author_locked_terms에는 본문 집필 시 철자를 바꾸면 안 되는
+   고유명사를 모두 모은다 — 문파·학교·초식·무기·기보 이름.
+
+[JSON 출력 — 이 구조만. 마크다운·설명·주석 절대 금지]
+{{
+  "martial_level_system": "",
+  "power_taxonomy": [
+    {{
+      "name": "",
+      "category": "내공 / 외공 / 경공 / 금기 / 기타 중 하나",
+      "principle": "",
+      "visual": "",
+      "cost": ""
+    }}
+  ],
+  "faction_arts": [
+    {{
+      "faction": "",
+      "signature": "",
+      "training": "",
+      "arts": [
+        {{
+          "name": "",
+          "tier": "",
+          "principle": "",
+          "visual": "",
+          "cost": "",
+          "users": [],
+          "first_appearance_hint": ""
+        }}
+      ]
+    }}
+  ],
+  "artifacts": [
+    {{
+      "name": "",
+      "type": "비급 / 영물 / 무기 / 영약 / 독약 / 향 중 하나",
+      "owner": "",
+      "power": "",
+      "visual": "",
+      "cost": "",
+      "reveal_timing": ""
+    }}
+  ],
+  "weapons": [
+    {{ "name": "", "faction": "", "form": "", "visual": "" }}
+  ],
+  "forbidden": [
+    {{ "name": "", "trigger": "", "consequence": "" }}
+  ],
+  "competition_rules": {{
+    "name": "",
+    "format": "",
+    "scoring": "",
+    "disqualification": "",
+    "prize": ""
+  }},
+  "author_locked_terms": []
+}}
+
+[중요]
+- 위 JSON 객체만 출력. 코드 블록(```) 없이.
+- 빈값은 "" 또는 []. null 금지.
+- "등에서 선택" 같은 가이드 문구를 출력값에 넣지 말 것."""
+
+
+def build_storyline_extract_prompt(brief_text, concept_card=None):
+    """기획서 → 막 구조 스토리라인 추출 (v2.4.0 신규).
+
+    [왜 필요한가]
+    아미고 기획서의 스토리라인 8,300자에는 EP1 오프닝(표창 기습·
+    쇠구슬·축지법 등교)과 결승의 정체 폭로가 설계돼 있었다.
+    12,000자 앞뒤 절단에서 이 구간이 통째로 잘려나가 EP1이
+    백지 상태로 집필됐다. 이 함수는 스토리라인을 우선 확보한
+    압축으로 막 구조를 보존한다. Core Arc 설계의 재료가 된다.
+    """
+    compressed, _report = compress_brief_for_prompt(
+        brief_text, budget=12000, profile="storyline"
+    )
+
+    title = ""
+    if isinstance(concept_card, dict):
+        title = concept_card.get("title", "") or ""
+
+    return f"""다음은 무협 작품 기획서입니다. 여기서 **막 구조 스토리라인만**
+추출해 JSON으로 정리하세요. {f"작품명: {title}" if title else ""}
+
+[기획서 (섹션별 발췌 — 스토리라인·시놉시스 우선 보존)]
+{compressed}
+
+[추출 지침]
+1. 기획서에 서술된 사건만 옮긴다. 없는 사건을 창작하지 않는다.
+2. 기획서가 이미 막·단계 이름을 쓰고 있으면 **그 이름을 그대로**
+   beat_name에 옮긴다. (예: 오프닝, 후킹포인트, 도발적 사건,
+   첫번째 변곡점, 중간점의 사건, 두번째 변곡점, 클라이맥스, 결말)
+3. 각 비트의 events에는 실제로 벌어지는 사건을 순서대로 적는다.
+   인물 이름·초식명·소품 이름은 원문 철자를 그대로 쓴다.
+4. opening_scene은 기획서 오프닝 장면을 최대한 구체적으로 옮긴다.
+   EP1 집필의 직접 재료가 되므로 시각적 디테일(무엇이 날아오는가,
+   누가 무슨 무공을 쓰는가)을 빠뜨리지 않는다.
+5. season_boundary에는 이 시즌이 어디서 끝나고 다음 시즌으로
+   무엇이 넘어가는지 적는다. 기획서에 없으면 빈 문자열.
+
+[JSON 출력 — 이 구조만. 마크다운·설명·주석 절대 금지]
+{{
+  "opening_scene": {{
+    "setting": "",
+    "events": [],
+    "martial_showcase": "",
+    "hook": ""
+  }},
+  "acts": [
+    {{
+      "act": "1막 / 2막 / 3막",
+      "beats": [
+        {{
+          "beat_name": "",
+          "events": [],
+          "characters": [],
+          "martial_showcase": "",
+          "turning_point": ""
+        }}
+      ]
+    }}
+  ],
+  "season_boundary": "",
+  "unresolved_threads": []
+}}
+
+[중요]
+- 위 JSON 객체만 출력. 코드 블록(```) 없이.
+- 빈값은 "" 또는 []. null 금지."""
+
+
+def build_martial_bible_block(martial_bible):
+    """초식 바이블을 플롯·집필·재집필 프롬프트에 주입 (v2.4.0 신규)."""
+    if not isinstance(martial_bible, dict) or not martial_bible:
+        return ""
+
+    lines = ["## ⚔️ 초식 바이블 (작가 설정 — 철자 변경 금지)"]
+
+    mls = (martial_bible.get("martial_level_system") or "").strip()
+    if mls:
+        lines.append("")
+        lines.append(f"**경지·등급 체계**: {mls}")
+
+    tax = martial_bible.get("power_taxonomy") or []
+    if isinstance(tax, list) and tax:
+        lines.append("")
+        lines.append("### 무공 분류")
+        for item in tax[:14]:
+            if not isinstance(item, dict):
+                continue
+            nm = (item.get("name") or "").strip()
+            if not nm:
+                continue
+            cat = (item.get("category") or "").strip()
+            desc = (item.get("principle") or item.get("visual") or "").strip()
+            head = f"- **{nm}**" + (f" [{cat}]" if cat else "")
+            lines.append(head + (f" — {desc}" if desc else ""))
+
+    fa = martial_bible.get("faction_arts") or []
+    if isinstance(fa, list) and fa:
+        lines.append("")
+        lines.append("### 유파·학교별 초식")
+        for grp in fa[:8]:
+            if not isinstance(grp, dict):
+                continue
+            fac = (grp.get("faction") or "").strip()
+            if not fac:
+                continue
+            sig = (grp.get("signature") or "").strip()
+            lines.append(f"**{fac}**" + (f" — {sig}" if sig else ""))
+            for art in (grp.get("arts") or [])[:8]:
+                if not isinstance(art, dict):
+                    continue
+                nm = (art.get("name") or "").strip()
+                if not nm:
+                    continue
+                bits = []
+                if art.get("visual"):
+                    bits.append(str(art["visual"]).strip())
+                if art.get("cost"):
+                    bits.append("대가: " + str(art["cost"]).strip())
+                users = art.get("users") or []
+                if isinstance(users, list) and users:
+                    bits.append("사용자: " + ", ".join(str(u) for u in users[:4]))
+                lines.append(f"  · {nm}" + (f" — {' / '.join(bits)}" if bits else ""))
+
+    arts = martial_bible.get("artifacts") or []
+    if isinstance(arts, list) and arts:
+        lines.append("")
+        lines.append("### 기보·영물")
+        for it in arts[:10]:
+            if not isinstance(it, dict):
+                continue
+            nm = (it.get("name") or "").strip()
+            if not nm:
+                continue
+            bits = []
+            if it.get("owner"):
+                bits.append("소유: " + str(it["owner"]).strip())
+            if it.get("power"):
+                bits.append(str(it["power"]).strip())
+            if it.get("reveal_timing"):
+                bits.append("공개 시점: " + str(it["reveal_timing"]).strip())
+            lines.append(f"- **{nm}**" + (f" — {' / '.join(bits)}" if bits else ""))
+
+    wps = martial_bible.get("weapons") or []
+    if isinstance(wps, list) and wps:
+        lines.append("")
+        lines.append("### 무기")
+        for it in wps[:10]:
+            if not isinstance(it, dict):
+                continue
+            nm = (it.get("name") or "").strip()
+            if not nm:
+                continue
+            extra = " / ".join(
+                str(it[k]).strip() for k in ("faction", "form", "visual")
+                if it.get(k)
+            )
+            lines.append(f"- **{nm}**" + (f" — {extra}" if extra else ""))
+
+    fb = martial_bible.get("forbidden") or []
+    if isinstance(fb, list) and fb:
+        lines.append("")
+        lines.append("### 금기·부작용")
+        for it in fb[:8]:
+            if not isinstance(it, dict):
+                continue
+            nm = (it.get("name") or "").strip()
+            if not nm:
+                continue
+            tail = " / ".join(
+                str(it[k]).strip() for k in ("trigger", "consequence") if it.get(k)
+            )
+            lines.append(f"- **{nm}**" + (f" — {tail}" if tail else ""))
+
+    cr = martial_bible.get("competition_rules")
+    if isinstance(cr, dict) and any((cr.get(k) or "") for k in cr):
+        lines.append("")
+        lines.append("### 대회 규칙")
+        cr_label = {
+            "name": "대회명", "format": "형식", "scoring": "판정",
+            "disqualification": "실격", "prize": "상금",
+        }
+        for k, lb in cr_label.items():
+            v = (cr.get(k) or "").strip() if isinstance(cr.get(k), str) else ""
+            if v:
+                lines.append(f"- {lb}: {v}")
+
+    locked = martial_bible.get("author_locked_terms") or []
+    if isinstance(locked, list) and locked:
+        terms = [str(t).strip() for t in locked if str(t).strip()][:40]
+        if terms:
+            lines.append("")
+            lines.append("### A28 철자 고정 목록 (변경 금지)")
+            lines.append(", ".join(terms))
+
+    if len(lines) <= 1:
+        return ""
+
+    lines.append("")
+    lines.append("### 운용 규칙 (A28)")
+    lines.append("- 위 목록의 고유명사는 **철자·한자를 그대로** 쓴다. 유사어로 바꾸지 않는다.")
+    lines.append("- 목록에 **없는 초식을 새로 만들지 않는다.** 서사상 반드시 필요하면")
+    lines.append("  A27의 4요소 설명을 붙여 도입하고, 이후 회차에서 같은 이름으로 고정한다.")
+    lines.append("- 무협 관용 초식명(자하신공·태극혼원공 등)으로 대체 금지.")
+    return "\n".join(lines)
+
+
+def build_storyline_block(storyline_acts, ep_number=None, total_eps=50):
+    """기획서 막 구조 스토리라인을 설계·집필에 주입 (v2.4.0 신규).
+
+    Args:
+        storyline_acts: build_storyline_extract_prompt 산출물
+        ep_number: 회차 번호. 1~2화면 오프닝 장면을 전면에 세운다.
+        total_eps: 총 회차 수 (막 위치 안내용)
+    """
+    if not isinstance(storyline_acts, dict) or not storyline_acts:
+        return ""
+
+    lines = ["## 📖 기획서 스토리라인 (작가 설계 — 이 흐름을 따를 것)"]
+
+    op = storyline_acts.get("opening_scene")
+    if isinstance(op, dict) and (op.get("events") or op.get("setting")):
+        is_opening_ep = ep_number is None or int(ep_number) <= 2
+        head = "### ⭐ 오프닝 장면 (작가 설계 — EP1의 직접 재료)" if is_opening_ep \
+            else "### 오프닝 장면 (참고 — 이미 지난 구간)"
+        lines.append("")
+        lines.append(head)
+        if op.get("setting"):
+            lines.append(f"- 배경: {str(op['setting']).strip()}")
+        for ev in (op.get("events") or [])[:8]:
+            lines.append(f"- {str(ev).strip()}")
+        if op.get("martial_showcase"):
+            lines.append(f"- 무공 시전: {str(op['martial_showcase']).strip()}")
+        if op.get("hook"):
+            lines.append(f"- 후킹: {str(op['hook']).strip()}")
+
+    acts = storyline_acts.get("acts")
+    if isinstance(acts, list) and acts:
+        lines.append("")
+        lines.append("### 막 구조")
+        for act in acts[:4]:
+            if not isinstance(act, dict):
+                continue
+            nm = (act.get("act") or "").strip()
+            if nm:
+                lines.append(f"**{nm}**")
+            for beat in (act.get("beats") or [])[:10]:
+                if not isinstance(beat, dict):
+                    continue
+                bn = (beat.get("beat_name") or "").strip()
+                evs = beat.get("events") or []
+                ev_txt = " / ".join(str(e).strip() for e in evs[:3])
+                row = f"  · {bn}" if bn else "  ·"
+                if ev_txt:
+                    row += f" — {ev_txt}"
+                lines.append(row)
+                if beat.get("martial_showcase"):
+                    lines.append(f"      무공: {str(beat['martial_showcase']).strip()}")
+
+    sb = (storyline_acts.get("season_boundary") or "").strip()
+    if sb:
+        lines.append("")
+        lines.append(f"### 시즌 경계\n{sb}")
+
+    ut = storyline_acts.get("unresolved_threads") or []
+    if isinstance(ut, list) and ut:
+        lines.append("")
+        lines.append("### 다음 시즌으로 넘기는 미해결")
+        for t in ut[:6]:
+            lines.append(f"- {str(t).strip()}")
+
+    if len(lines) <= 1:
+        return ""
+
+    lines.append("")
+    lines.append("### 스토리라인 준수 규칙")
+    lines.append("- 위 흐름은 작가가 설계한 것이다. 사건 순서를 임의로 바꾸지 말 것.")
+    lines.append("- 시즌 경계를 넘지 말 것. 다음 시즌 사건을 이 시즌에 끌어오지 않는다.")
+    lines.append("- 오프닝 장면이 명시돼 있으면 EP1은 그 장면에서 시작한다.")
+    return "\n".join(lines)
+
+
 def build_martial_registry_block(character_bible, episode_plots=None,
-                                 current_ep=1):
+                                 current_ep=1, martial_bible=None):
     """무공·초식 사전 블록 (v2.3.1 신규).
 
     회차가 진행되면서 등장한 초식을 누적해 집필 프롬프트에 전달한다.
@@ -1520,7 +2180,15 @@ def build_martial_registry_block(character_bible, episode_plots=None,
         episode_plots: {ep: plot_dict} — 플롯의 martial_showcase 누적
         current_ep: 현재 집필 회차 (이전 회차만 '기등장'으로 취급)
     """
+    # v2.4.0: 초식 바이블이 있으면 그것이 1순위 소스다.
+    # (v2.3.1은 character_bible의 martial_system 필드를 읽었으나,
+    #  캐릭터 바이블 생성 프롬프트가 그 필드를 요구하지 않아
+    #  항상 빈 구역이었다 — 사고 패턴 L)
+    mb_block = build_martial_bible_block(martial_bible)
+
     lines = ["## ⭐ 무공·초식 사전 (일관성 필수)"]
+    if mb_block:
+        lines = [mb_block, "", "## ⭐ 무공·초식 사전 (회차 누적)"]
 
     # 1) 바이블에 정의된 인물별 무공 체계
     bible_entries = []
@@ -1988,6 +2656,20 @@ A27. 초식 일관성·설명 룰 (매 회차)
   - 경지 체계는 작가가 확정한 이름만 사용. 새 등급을 만들지 말 것.
   - 초식 인플레 주의: 회차마다 새 초식을 남발하면 기존 초식의
     무게가 사라진다. 신규 초식은 서사적 이유가 있을 때만.
+
+A28. 작가 설정 우선 룰 (매 회차 — v2.4.0)
+  기획서에 이미 존재하는 고유명사를 관용어로 바꾸는 것은
+  작품의 차별화 장치를 지우는 행위다.
+  - **초식 바이블·세계관 블록에 있는 고유명사는 철자를 그대로 쓴다.**
+    인물명·문파명·학교명·초식명·무기명·기보명·대회명 전부.
+  - 작가가 관용 한자와 다르게 표기한 경우를 존중한다.
+    (華山 → 花山 / 武當 → 武螳 / 峨嵋 → 阿美 같은 의도적 변경)
+  - **무협 관용 초식명으로 대체 금지.** (X) 자하신공·태극혼원공·
+    구양신공 같은 일반명을 작가 설정 초식 자리에 넣는 것
+  - 바이블에 없는 인물·조직·초식을 새로 만들지 않는다. 서사상
+    꼭 필요하면 A27의 4요소 설명을 붙여 도입하고 이후 고정한다.
+  - 소품·기보는 그 정체가 밝혀지는 시점(reveal_timing)을 지킨다.
+    아직 밝혀지지 않은 물건은 이름을 부르지 않고 형태로만 쓴다.
 """
 
 
@@ -2284,12 +2966,12 @@ def build_parse_brief_prompt(brief_text):
     - JSON 출력 강제: 마크다운 코드 블록 / 가이드 문구 혼입 방지
     - 빈 필드 명시 규칙: 추론 불가 시 빈 문자열·빈 배열로 남김
     """
-    # ── 분량 보호: 토큰 한도 초과 방지 ──
-    MAX_BRIEF_CHARS = 12000  # 약 15K~20K 토큰 (한국어 기준)
-    if len(brief_text) > MAX_BRIEF_CHARS:
-        head = brief_text[: MAX_BRIEF_CHARS - 2000]
-        tail = brief_text[-2000:]
-        brief_text = head + "\n\n[...중략...]\n\n" + tail
+    # ── 분량 보호 (v2.4.0: 섹션 인식 압축으로 교체) ──
+    # 기존 단순 앞뒤 절단은 가운데 스토리라인·별첨을 통째로
+    # 버렸다. 이제 섹션별 가중 예산으로 배분한다.
+    brief_text, _brief_report = compress_brief_for_prompt(
+        brief_text, budget=12000, profile="concept"
+    )
 
     # ── 선택지 리스트를 별도 블록으로 분리 (JSON 안에 한국어 가이드 혼입 방지) ──
     formula_keys = list(WUXIA_FORMULAS.keys())
@@ -2355,10 +3037,46 @@ def build_parse_brief_prompt(brief_text):
     "name": "",
     "faction": ""
   }},
+  "key_supporting_chars": [
+    {{
+      "name": "",
+      "role": "",
+      "faction": "",
+      "function": "",
+      "cultivation_stage": "",
+      "signature_skill": "",
+      "arc": ""
+    }}
+  ],
   "setting": {{
     "era": "",
     "location": "",
     "worldbuilding_notes": ""
+  }},
+  "world_setting": {{
+    "era": "",
+    "location": "",
+    "unique_rules": "",
+    "martial_level_system": "",
+    "factions": [
+      {{
+        "name": "",
+        "type": "문파 / 학원 / 관·정부 / 기타",
+        "location": "",
+        "history": "",
+        "signature_art": "",
+        "training": "",
+        "culture": "",
+        "key_members": []
+      }}
+    ]
+  }},
+  "competition_rules": {{
+    "name": "",
+    "format": "",
+    "scoring": "",
+    "disqualification": "",
+    "prize": ""
   }},
   "narrative_motifs": [],
   "target_platform": "",
@@ -2371,7 +3089,20 @@ def build_parse_brief_prompt(brief_text):
 - 위 JSON 객체만 출력하세요. 마크다운 코드 블록(```json ... ```) 없이.
 - 설명·주석·"등에서 선택" 같은 가이드 문구를 출력값에 포함하지 마세요.
 - 빈값은 "" 혹은 [] 사용. null 사용 금지.
-- 한국어 키 이름은 위 스키마와 정확히 동일하게 유지."""
+- 한국어 키 이름은 위 스키마와 정확히 동일하게 유지.
+
+[A28 작가 설정 우선 — 반드시 지킬 것]
+- **고유명사는 기획서 원문 철자를 그대로 옮긴다.** 인물명·문파명·
+  학교명·초식명·무기명·대회명 전부. 한자 병기가 있으면 함께 옮긴다.
+- 작가가 일부러 관용 한자와 다르게 쓴 경우가 있다(華山 → 花山,
+  武當 → 武螳, 峨嵋 → 阿美). 임의로 "고쳐" 쓰지 말 것.
+- **기획서에 없는 인물·조직·초식을 만들지 않는다.** 빈값으로 둔다.
+- key_supporting_chars는 기획서에 등장하는 주요 인물을 **최대 12명까지**
+  담는다. 임의로 5명으로 줄이지 말 것. 스승·라이벌·학원 내 대립자·
+  동료 학생을 모두 포함한다.
+- 경지 체계(martial_level_system)가 기획서에 없으면 빈 문자열로 둔다.
+  **경지 등급을 창작해 넣지 말 것.** 내공·외공 분류로 강약을 표현하는
+  작품도 있다."""
 
 
 def build_brief_to_seed_prompt(brief_text, episode_structure=None):
@@ -2625,8 +3356,12 @@ def normalize_motif_list(motifs):
 
 
 def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
-                          style_dna="", style_strength="중"):
-    """Core Arc 50화 생성."""
+                          style_dna="", style_strength="중",
+                          storyline_acts=None, martial_bible=None):
+    """Core Arc 50화 생성.
+
+    v2.4.0: 기획서 막 구조(storyline_acts)와 초식 바이블을 재료로 주입.
+    """
     formula_key = concept_card.get("formula_key", "")
     protagonist_type_key = concept_card.get("protagonist_type", "")
     tone_preset = concept_card.get("tone_preset", "")
@@ -2657,6 +3392,10 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
 {tone_block}
 
 {motif_block}
+
+{build_storyline_block(storyline_acts, ep_number=1, total_eps=core_eps)}
+
+{build_martial_bible_block(martial_bible)}
 
 {_style_block(style_dna, style_strength)}
 
@@ -2810,18 +3549,24 @@ JSON만 반환."""
 def build_episode_plot_prompt(arc_block, plant_map, ep_number,
                               concept_card, prev_summaries="",
                               producer_note="", character_bible=None,
-                              episode_plots=None):
+                              episode_plots=None, martial_bible=None,
+                              storyline_acts=None):
     """회차 플롯 생성.
 
     v2.3.1: 초식 사전 주입 — 이미 등장한 초식을 알고 설계하도록.
+    v2.4.0: martial_bible(초식 바이블) 주입 — 작가 설정 초식만 쓰도록.
     """
     martial_block = build_martial_registry_block(
-        _parse_characters_arg(character_bible), episode_plots, ep_number
+        _parse_characters_arg(character_bible), episode_plots, ep_number,
+        martial_bible=martial_bible
     )
+    storyline_block = build_storyline_block(storyline_acts, ep_number=ep_number)
     return f"""{_pn_block(producer_note)}
 
 ## 컨셉 카드 (요약)
 {concept_card}
+
+{storyline_block}
 
 {martial_block}
 
@@ -2887,7 +3632,7 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
                                ep_number, rating="19금",
                                platform="문피아", producer_note="",
                                concept_card=None, profession_blocks="",
-                               episode_plots=None):
+                               episode_plots=None, martial_bible=None):
     """회차 본문 집필.
 
     v2.3.1: 세계관 블록·초식 사전 블록 주입
@@ -2909,7 +3654,8 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
     # v2.3.1: 작가 세계관 + 초식 사전
     world_block = build_world_setting_block(concept_card)
     martial_block = build_martial_registry_block(
-        _parse_characters_arg(characters), episode_plots, ep_number
+        _parse_characters_arg(characters), episode_plots, ep_number,
+        martial_bible=martial_bible
     )
 
     return f"""{_pn_block(producer_note)}
@@ -4159,6 +4905,7 @@ def build_episode_redo_prompt(
     character_bible_str,
     prose_scan_report="",
     episode_plots=None,
+    martial_bible=None,
 ):
     """검수 결과 점수 미달 시 재집필 프롬프트.
 
@@ -4224,7 +4971,7 @@ def build_episode_redo_prompt(
 
 {build_world_setting_block(concept_dict)}
 
-{build_martial_registry_block(_parse_characters_arg(character_bible_str), episode_plots, ep_number)}
+{build_martial_registry_block(_parse_characters_arg(character_bible_str), episode_plots, ep_number, martial_bible=martial_bible)}
 
 ## 재집필 지침
 1. **회차의 핵심 사건은 유지**하되, 약점을 보완해 재집필

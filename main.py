@@ -1,9 +1,29 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.3.1 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.4.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.4.0 (2026-07-25) — Brief Material Containers (기획서 재료 그릇)
+  · [사고 원인] 기획서 20,908자 중 12,000자만 앞·뒤 절단해 분석하고,
+    발췌된 내용조차 담을 필드가 없어 별첨(무공·기보·무기)과
+    스토리라인이 전량 소실. 집필 단계에서 LLM이 빈 자리를 무협
+    관용구로 창작해 채웠음.
+  · STEP 1 기획서 업로드 탭에 섹션 인식 결과 표시 신설
+    — 개요/로그라인/기획의도/세계관/캐릭터/시놉시스/스토리라인/
+      회차/별첨 별 분량을 업로드 즉시 확인
+  · ⚔️ 초식 바이블 추출 버튼 신설 — 무공 분류·유파별 초식·기보·
+    무기·금기·대회 규칙을 별도 JSON으로 확보 (편집 가능)
+  · 📖 스토리라인 추출 버튼 신설 — 막 구조·오프닝 장면 확보
+    (EP1 오프닝이 백지가 되는 문제 해결)
+  · session_state에 martial_bible / storyline_acts 신설 +
+    프로젝트 백업 대상에 추가
+  · 플롯·집필·재집필 호출에 martial_bible 전달 — A28 작가 설정
+    우선 룰이 매 회차 작동
+  · Core Arc·회차 플롯 호출에 storyline_acts 전달 — 작가가 설계한
+    막 구조와 오프닝 장면이 50화 비트 설계의 재료가 됨
+  · 12,000자 초과 경고를 안내 문구로 교체 (섹션 압축으로 대체됨)
+
 v2.3.1 (2026-07-25) — Worldbuilding & Martial Registry + Restore Fix
   · [수정] 프로젝트 복원 시 회차 키 타입 불일치 해결
     — JSON은 문자열 키("1"), session_state는 정수 키(1)를 쓰는데
@@ -121,6 +141,10 @@ from prompt import (
     ENGINE_BUILD_DATE,                     # v2.1.0 신규
     build_system_prompt,
     build_parse_brief_prompt,
+    build_martial_bible_prompt,           # v2.4.0 신규
+    build_storyline_extract_prompt,       # v2.4.0 신규
+    extract_brief_sections,               # v2.4.0 신규
+    compress_brief_for_prompt,            # v2.4.0 신규
     build_brief_to_seed_prompt,           # v2.0 신규
     build_brief_episode_extraction_prompt, # v2.0 신규
     build_generate_concept_prompt,
@@ -604,6 +628,9 @@ defaults = {
     "wuxia_idea_seed_data": None,  # 업로드된 IdeaSeed JSON dict
     # v2.1.4 복원 가드
     "_restored_file_sig": None,    # 마지막으로 복원한 프로젝트 파일 식별자
+    # v2.4.0 기획서 재료 그릇
+    "martial_bible": {},           # 초식 바이블 (무공·초식·기보·무기)
+    "storyline_acts": {},          # 기획서 막 구조 스토리라인
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -635,6 +662,9 @@ PROJECT_KEYS = [
     # v2.3.1: 5축 검수 결과도 백업에 포함 — 누락 시 복원 후
     # 25화 누적 대시보드가 초기화됨
     "validation_results",
+    # v2.4.0: 기획서에서 추출한 재료 — 누락 시 복원 후 초식 바이블이
+    # 사라져 집필 프롬프트에서 A28이 작동하지 않음
+    "martial_bible", "storyline_acts",
     "producer_note", "style_dna", "style_strength", "brief_text",
 ]
 
@@ -825,9 +855,33 @@ with tab1:
                     st.metric("기획서 분량", f"{brief_len:,}자")
                 with col_info2:
                     if brief_len > 12000:
-                        st.warning(f"⚠️ 12,000자 초과 — 자동으로 앞·뒤 발췌하여 분석")
+                        st.info(
+                            "12,000자 초과 — v2.4.0 섹션 인식 압축으로 분석합니다. "
+                            "스토리라인·별첨은 별도 추출 버튼으로 전량 확보합니다."
+                        )
                     else:
                         st.success("✅ 분량 적정")
+
+                # ── v2.4.0: 섹션 인식 결과 표시 ──
+                _sections = extract_brief_sections(brief_text)
+                if _sections:
+                    _label = {
+                        "overview": "개요", "logline": "로그라인", "intent": "기획의도",
+                        "world": "세계관", "character": "캐릭터", "synopsis": "시놉시스",
+                        "storyline": "스토리라인", "episodes": "회차 구성",
+                        "appendix": "별첨(무공·기보·무기)", "other": "기타",
+                    }
+                    with st.expander("🧩 인식된 기획서 섹션", expanded=True):
+                        _rows = [
+                            f"- **{_label.get(k, k)}** — {len(v):,}자"
+                            for k, v in _sections.items() if v.strip()
+                        ]
+                        st.markdown("\n".join(_rows))
+                        if "appendix" not in _sections:
+                            st.caption(
+                                "별첨 섹션이 인식되지 않았습니다. 무공·기보 설정이 "
+                                "본문에 섞여 있으면 초식 바이블 추출로 회수됩니다."
+                            )
 
                 with st.expander("파싱된 기획서 내용 확인", expanded=False):
                     st.text_area("내용", brief_text, height=200, label_visibility="collapsed")
@@ -861,6 +915,124 @@ with tab1:
                                 "2. **결말 정보 누락**: 위 응답이 중간에 잘렸다면 max_tokens 한도 초과 — 짧은 기획서로 재시도\n"
                                 "3. **재시도**: 같은 파일 그대로 다시 버튼 클릭 (LLM 응답 변동성 있음)"
                             )
+
+                # ══════════════════════════════════════════
+                # v2.4.0: 기획서 재료 추출 (초식 바이블 · 스토리라인)
+                # ──────────────────────────────────────────
+                # 컨셉 카드 한 번의 호출로 20,000자 기획서 전체를
+                # 담을 수 없다. 재료별로 나눠 추출해 각각 저장한다.
+                # ══════════════════════════════════════════
+                st.markdown("---")
+                st.markdown("##### ⚔️ 기획서 재료 추출 (v2.4.0)")
+                st.caption(
+                    "컨셉 카드가 담지 못하는 무공·초식·기보·무기 설정과 "
+                    "막 구조 스토리라인을 별도로 추출해 보관합니다. "
+                    "집필 단계에서 자동 주입됩니다."
+                )
+
+                col_ex1, col_ex2 = st.columns(2)
+
+                with col_ex1:
+                    if st.button("⚔️ 초식 바이블 추출", use_container_width=True,
+                                 key="extract_martial_bible"):
+                        with st.spinner("무공·초식·기보 설정 추출 중..."):
+                            raw_mb = call_claude(
+                                build_martial_bible_prompt(
+                                    brief_text, st.session_state.concept_card
+                                ),
+                                max_tokens=MAX_TOKENS_STRUCTURE,
+                            )
+                            parsed_mb, dbg_mb = safe_json(raw_mb, debug=True)
+                            if parsed_mb:
+                                st.session_state.martial_bible = parsed_mb
+                                st.success("✅ 초식 바이블 추출 완료")
+                                st.rerun()
+                            else:
+                                st.error("❌ 초식 바이블 JSON 파싱 실패")
+                                with st.expander("디버그 정보", expanded=True):
+                                    st.write(f"실패 단계: {dbg_mb.get('stage_failed', '?')}")
+                                    st.code((raw_mb or "")[:1500], language="json")
+
+                with col_ex2:
+                    if st.button("📖 스토리라인 추출", use_container_width=True,
+                                 key="extract_storyline"):
+                        with st.spinner("막 구조 스토리라인 추출 중..."):
+                            raw_sl = call_claude(
+                                build_storyline_extract_prompt(
+                                    brief_text, st.session_state.concept_card
+                                ),
+                                max_tokens=MAX_TOKENS_STRUCTURE,
+                            )
+                            parsed_sl, dbg_sl = safe_json(raw_sl, debug=True)
+                            if parsed_sl:
+                                st.session_state.storyline_acts = parsed_sl
+                                st.success("✅ 스토리라인 추출 완료")
+                                st.rerun()
+                            else:
+                                st.error("❌ 스토리라인 JSON 파싱 실패")
+                                with st.expander("디버그 정보", expanded=True):
+                                    st.write(f"실패 단계: {dbg_sl.get('stage_failed', '?')}")
+                                    st.code((raw_sl or "")[:1500], language="json")
+
+                # ── 추출 결과 표시 ──
+                _mb = st.session_state.get("martial_bible") or {}
+                if _mb:
+                    _n_tax = len(_mb.get("power_taxonomy") or [])
+                    _n_fac = len(_mb.get("faction_arts") or [])
+                    _n_art = len(_mb.get("artifacts") or [])
+                    _n_wp = len(_mb.get("weapons") or [])
+                    _n_lock = len(_mb.get("author_locked_terms") or [])
+                    _n_arts = sum(
+                        len(g.get("arts") or [])
+                        for g in (_mb.get("faction_arts") or [])
+                        if isinstance(g, dict)
+                    )
+                    st.success(
+                        f"⚔️ 초식 바이블 보유 — 무공 분류 {_n_tax} · "
+                        f"유파 {_n_fac}(초식 {_n_arts}) · 기보 {_n_art} · "
+                        f"무기 {_n_wp} · 고정 용어 {_n_lock}"
+                    )
+                    with st.expander("초식 바이블 보기 / 편집", expanded=False):
+                        _mb_txt = st.text_area(
+                            "martial_bible JSON",
+                            value=json.dumps(_mb, ensure_ascii=False, indent=2),
+                            height=320,
+                            key="martial_bible_edit",
+                        )
+                        if st.button("💾 초식 바이블 저장", key="save_martial_bible"):
+                            try:
+                                st.session_state.martial_bible = json.loads(_mb_txt)
+                                st.success("저장 완료")
+                                st.rerun()
+                            except Exception as je:
+                                st.error(f"JSON 형식 오류: {je}")
+
+                _sl = st.session_state.get("storyline_acts") or {}
+                if _sl:
+                    _n_acts = len(_sl.get("acts") or [])
+                    _n_beats = sum(
+                        len(a.get("beats") or [])
+                        for a in (_sl.get("acts") or []) if isinstance(a, dict)
+                    )
+                    _has_open = bool((_sl.get("opening_scene") or {}).get("events"))
+                    st.success(
+                        f"📖 스토리라인 보유 — {_n_acts}막 · 비트 {_n_beats} · "
+                        f"오프닝 장면 {'있음' if _has_open else '없음'}"
+                    )
+                    with st.expander("스토리라인 보기 / 편집", expanded=False):
+                        _sl_txt = st.text_area(
+                            "storyline_acts JSON",
+                            value=json.dumps(_sl, ensure_ascii=False, indent=2),
+                            height=320,
+                            key="storyline_edit",
+                        )
+                        if st.button("💾 스토리라인 저장", key="save_storyline"):
+                            try:
+                                st.session_state.storyline_acts = json.loads(_sl_txt)
+                                st.success("저장 완료")
+                                st.rerun()
+                            except Exception as je:
+                                st.error(f"JSON 형식 오류: {je}")
             except Exception as e:
                 st.error(f"파일 읽기 실패: {e}")
 
@@ -1158,6 +1330,8 @@ with tab2:
                             producer_note=st.session_state.producer_note,
                             style_dna=st.session_state.style_dna,
                             style_strength=st.session_state.style_strength,
+                            storyline_acts=st.session_state.storyline_acts,
+                            martial_bible=st.session_state.martial_bible,
                         ),
                         max_tokens=MAX_TOKENS_ARC,
                     )
@@ -1422,6 +1596,8 @@ with tab3:
                                 producer_note=st.session_state.producer_note,
                                 character_bible=st.session_state.character_bible,
                                 episode_plots=st.session_state.episode_plots,
+                                martial_bible=st.session_state.martial_bible,
+                                storyline_acts=st.session_state.storyline_acts,
                             ),
                             max_tokens=MAX_TOKENS_STRUCTURE,
                         )
@@ -1454,6 +1630,7 @@ with tab3:
                                 concept_card=st.session_state.concept_card,
                                 profession_blocks=profession_blocks,
                                 episode_plots=st.session_state.episode_plots,
+                                martial_bible=st.session_state.martial_bible,
                             ),
                             max_tokens=MAX_TOKENS_EPISODE,
                         )
@@ -1774,6 +1951,7 @@ with tab3:
                                         json.dumps(st.session_state.character_bible, ensure_ascii=False),
                                         prose_scan_report=redo_scan_report,
                                         episode_plots=st.session_state.episode_plots,
+                                        martial_bible=st.session_state.martial_bible,
                                     ),
                                     max_tokens=MAX_TOKENS_EPISODE,
                                 )
