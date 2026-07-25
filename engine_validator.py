@@ -1,9 +1,23 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.3.0 — engine_validator.py
+👖 BLUE JEANS WUXIA ENGINE v2.5.0 — engine_validator.py
 ═══════════════════════════════════════════════════════════
 회차 자가 검수 · 재료 활용 검증 · 전환점 자동 감지 · 문체 정적 스캐너
+· 초식 일관성 정적 검사
 
 [변경 이력]
+v2.5.0 (2026-07-25) — Martial Consistency Scanner
+  · scan_martial_consistency() 신설 — A27(초식 일관성)·A28(작가 설정
+    우선) 정적 검사. LLM 미사용, 재현성 100%
+    — 바이블 초식 사용 현황 / 무협 관용명 침입(자하신공·태극혼원공류)
+    — 바이블 외 초식 후보(즉흥 작명 의심) / 한자 병기 반복
+  · format_martial_scan_report() 신설 — 작가용 리포트.
+    UI 표시와 REDO 프롬프트 주입에 공용
+  · v2.4.0이 그릇(초식 바이블)과 룰(A28)을 만들었으나 준수 여부를
+    확인할 수단이 없었다. 아미고 EP1의 초식명 0개를 알아내는 데
+    사람의 통독이 필요했던 문제를 해결
+  · 설계 원칙 K 유지 — 검출만 하고 본문은 수정하지 않는다
+
+
 v2.3.0 (2026-07-23) — Youth Target Diagnosis
   · diagnose_youth_target() 신설 — A25(1020 경량화)·A26(무협 액기스)
     정량 진단. 대사 비율·대사 밀도·묘사 연속·무공/격돌 표현 검출
@@ -1318,6 +1332,271 @@ def format_youth_diagnosis_report(diag: dict, ep_number: int = 0) -> str:
         lines.append(f"- {it['detail']}")
 
     lines.append("\n> 진단은 검출만 합니다. 수정 여부와 방식은 작가의 판단입니다.")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════
+# 초식 일관성 정적 검사 (A27·A28) — v2.5.0 신규
+# LLM 미사용. 초식 바이블과 본문을 대조해 검출만 한다.
+# 수정은 작가 영역이다 (설계 원칙 K).
+# ═══════════════════════════════════════════════════
+
+# 무협 관용 초식명 — 작가 설정 자리에 끼어들면 A28 위반
+# (아미고 사고: 화산장풍·당랑연검술 자리에 자하신공·태극혼원공이
+#  들어와 작품의 한자 차별화 장치가 지워졌다)
+_GENERIC_ART_NAMES = [
+    "자하신공", "태극혼원공", "구양신공", "구음진경", "건곤대나이",
+    "능파미보", "일양지", "항룡십팔장", "타구봉법", "육맥신검",
+    "북명신공", "선천공", "천마신공", "흡성대법", "이화접목",
+    "벽사검법", "매화검법", "천화난사", "홍련참", "혈마공",
+]
+
+# 초식명 후보 추출 — 한글 2~6자 + 무공 접미어
+_ART_SUFFIXES = (
+    "신공", "심법", "검법", "도법", "장법", "권법", "지법", "보법",
+    "신법", "각법", "창법", "편법", "검술", "도술", "창술", "장풍",
+    "진경", "비급", "대법", "절기", "초식", "검결", "검진", "진법",
+)
+_ART_CANDIDATE_RE = re.compile(
+    r"([가-힣]{2,6}(?:" + "|".join(_ART_SUFFIXES) + r"))"
+)
+# 한자 병기 초식명 — 한글(한자) 형태
+_ART_WITH_HANJA_RE = re.compile(r"([가-힣]{2,8})\s*\(([\u4e00-\u9fff]{2,8})\)")
+
+
+def _collect_bible_terms(martial_bible: dict) -> dict:
+    """초식 바이블에서 용어를 종류별로 수집.
+
+    Returns:
+        {"arts": set, "artifacts": set, "weapons": set,
+         "locked": set, "all": set, "display": {정규화형: 원문}}
+    """
+    out = {"arts": set(), "artifacts": set(), "weapons": set(),
+           "locked": set(), "all": set(), "display": {}}
+    if not isinstance(martial_bible, dict):
+        return out
+
+    def _add(bucket, raw):
+        if not raw or not isinstance(raw, str):
+            return
+        raw = raw.strip()
+        if not raw:
+            return
+        out[bucket].add(raw)
+        out["all"].add(raw)
+        # 한자 병기를 떼어낸 한글 표기도 별칭으로 등록
+        base = re.sub(r"\s*\([^)]*\)\s*", "", raw).strip()
+        if base and base != raw:
+            out[bucket].add(base)
+            out["all"].add(base)
+            out["display"][base] = raw
+        out["display"].setdefault(raw, raw)
+
+    for item in martial_bible.get("power_taxonomy") or []:
+        if isinstance(item, dict):
+            _add("arts", item.get("name"))
+    for grp in martial_bible.get("faction_arts") or []:
+        if not isinstance(grp, dict):
+            continue
+        _add("arts", grp.get("signature"))
+        _add("arts", grp.get("training"))
+        for art in grp.get("arts") or []:
+            if isinstance(art, dict):
+                _add("arts", art.get("name"))
+    for item in martial_bible.get("artifacts") or []:
+        if isinstance(item, dict):
+            _add("artifacts", item.get("name"))
+    for item in martial_bible.get("weapons") or []:
+        if isinstance(item, dict):
+            _add("weapons", item.get("name"))
+    for item in martial_bible.get("forbidden") or []:
+        if isinstance(item, dict):
+            _add("arts", item.get("name"))
+    for t in martial_bible.get("author_locked_terms") or []:
+        _add("locked", t if isinstance(t, str) else "")
+    return out
+
+
+def scan_martial_consistency(text: str, martial_bible: dict = None,
+                             ep_number: int = 0) -> dict:
+    """A27(초식 일관성) + A28(작가 설정 우선) 정적 검사 — v2.5.0 신규.
+
+    LLM을 쓰지 않으므로 재현성이 100%다. 검출만 하고 수정하지 않는다.
+
+    [왜 필요한가]
+    v2.4.0이 초식 바이블과 A28 룰을 만들었지만, 룰을 지켰는지
+    확인하는 수단이 없었다. 아미고 EP1은 초식명 0개·무공 시전
+    0회였는데 이를 알아내는 데 사람의 통독이 필요했다.
+
+    Args:
+        text: 회차 본문
+        martial_bible: 초식 바이블 (없으면 관용명 검출만 수행)
+        ep_number: 회차 번호 (리포트 표기용)
+
+    Returns:
+        {
+          "has_bible": bool,
+          "bible_used": [{"term","count"}],      # 바이블 초식 사용 현황
+          "bible_unused": [str],                 # 이 회차에 안 쓰인 바이블 초식
+          "generic_hits": [{"term","count","samples"}],   # A28 관용명 위반
+          "unknown_arts": [{"term","count","samples"}],   # 바이블 외 초식 후보
+          "hanja_pairs": [{"term","count"}],     # 한자 병기 (첫 등장 초과 검출)
+          "locked_missing": [str],               # 고정 용어 중 미등장
+          "art_mentions": int,                   # 초식 언급 총량
+          "flags": [str],                        # 요약 경보
+          "clean": bool,
+        }
+    """
+    result = {
+        "has_bible": bool(martial_bible),
+        "bible_used": [], "bible_unused": [],
+        "generic_hits": [], "unknown_arts": [],
+        "hanja_pairs": [], "locked_missing": [],
+        "art_mentions": 0, "flags": [], "clean": True,
+    }
+    if not text or not isinstance(text, str):
+        return result
+
+    terms = _collect_bible_terms(martial_bible or {})
+
+    # ── 1) 바이블 초식 사용 현황 ──
+    used, unused = [], []
+    for t in sorted(terms["arts"], key=len, reverse=True):
+        c = text.count(t)
+        if c > 0:
+            used.append({"term": terms["display"].get(t, t), "count": c})
+        else:
+            unused.append(terms["display"].get(t, t))
+    # 별칭 중복 정리 (한자 병기형과 한글형이 함께 잡힌 경우)
+    seen = set()
+    dedup_used = []
+    for u in sorted(used, key=lambda x: -x["count"]):
+        base = re.sub(r"\s*\([^)]*\)\s*", "", u["term"]).strip()
+        if base in seen:
+            continue
+        seen.add(base)
+        dedup_used.append(u)
+    result["bible_used"] = dedup_used
+    result["bible_unused"] = [
+        u for u in unused
+        if re.sub(r"\s*\([^)]*\)\s*", "", u).strip() not in seen
+    ][:20]
+    result["art_mentions"] = sum(u["count"] for u in dedup_used)
+
+    # ── 2) A28 관용 초식명 검출 ──
+    for g in _GENERIC_ART_NAMES:
+        c = text.count(g)
+        if c > 0 and g not in terms["all"]:
+            result["generic_hits"].append({
+                "term": g, "count": c,
+                "samples": _find_lines_with(text, g)[:2],
+            })
+
+    # ── 3) 바이블에 없는 초식 후보 검출 ──
+    cand_counts = {}
+    for m in _ART_CANDIDATE_RE.findall(text):
+        cand_counts[m] = cand_counts.get(m, 0) + 1
+    for cand, c in sorted(cand_counts.items(), key=lambda x: -x[1]):
+        if cand in terms["all"]:
+            continue
+        if any(cand in t or t in cand for t in terms["all"]):
+            continue  # 바이블 용어의 부분 문자열
+        if cand in [g["term"] for g in result["generic_hits"]]:
+            continue  # 관용명으로 이미 보고
+        result["unknown_arts"].append({
+            "term": cand, "count": c,
+            "samples": _find_lines_with(text, cand)[:2],
+        })
+    result["unknown_arts"] = result["unknown_arts"][:12]
+
+    # ── 4) 한자 병기 과다 (A10 글로벌 친화 — 첫 등장만 허용) ──
+    hanja = {}
+    for kor, han in _ART_WITH_HANJA_RE.findall(text):
+        key = f"{kor}({han})"
+        hanja[key] = hanja.get(key, 0) + 1
+    total_hanja = sum(hanja.values())
+    result["hanja_pairs"] = [
+        {"term": k, "count": v} for k, v in sorted(hanja.items(), key=lambda x: -x[1])
+        if v > 1
+    ][:10]
+
+    # ── 5) 고정 용어 중 미등장 (참고용 — 위반이 아님) ──
+    if terms["locked"]:
+        result["locked_missing"] = [
+            t for t in sorted(terms["locked"])
+            if text.count(t) == 0
+            and text.count(re.sub(r"\s*\([^)]*\)\s*", "", t).strip()) == 0
+        ][:20]
+
+    # ── 6) 요약 경보 ──
+    if result["generic_hits"]:
+        result["flags"].append(
+            "A28 위반 — 무협 관용 초식명이 등장합니다. 작가 설정 초식으로 교체가 필요합니다."
+        )
+    if result["has_bible"] and result["art_mentions"] == 0:
+        result["flags"].append(
+            "A26·A28 경보 — 바이블 초식이 한 번도 등장하지 않습니다. 무공 장면이 추상 묘사로 처리됐을 가능성이 큽니다."
+        )
+    if len(result["unknown_arts"]) >= 3:
+        result["flags"].append(
+            f"A27 주의 — 바이블에 없는 초식 후보가 {len(result['unknown_arts'])}종 검출됐습니다. 즉흥 작명 여부를 확인해 주십시오."
+        )
+    if total_hanja > 8:
+        result["flags"].append(
+            f"한자 병기 {total_hanja}회 — 첫 등장만 병기 원칙(>8회 감점) 초과입니다."
+        )
+    if not result["has_bible"]:
+        result["flags"].append(
+            "초식 바이블이 없습니다. STEP 1에서 추출하면 일관성 검사가 정밀해집니다."
+        )
+
+    result["clean"] = not result["generic_hits"] and not result["flags"]
+    return result
+
+
+def format_martial_scan_report(scan: dict, ep_number: int = 0) -> str:
+    """초식 일관성 검사 결과를 작가용 마크다운 리포트로 변환.
+
+    UI 표시와 REDO 프롬프트 주입에 공용으로 쓴다.
+    """
+    if not scan:
+        return ""
+    if scan.get("clean"):
+        return "✅ 초식 일관성: 검출 없음 (A27·A28 기준 통과)"
+
+    lines = ["### ⚔️ 초식 일관성 검사" + (f" (EP{ep_number})" if ep_number else "")]
+
+    for f in scan.get("flags", []):
+        lines.append(f"\n- {f}")
+
+    gh = scan.get("generic_hits") or []
+    if gh:
+        lines.append("\n**[A28] 무협 관용 초식명 검출** — 작가 설정 초식으로 교체 필요")
+        for g in gh:
+            lines.append(f"- \"{g['term']}\" × {g['count']}회")
+            for s in g.get("samples", []):
+                lines.append(f"    · `{s}`")
+
+    used = scan.get("bible_used") or []
+    if used:
+        lines.append("\n**바이블 초식 사용 현황**")
+        lines.append(", ".join(f"{u['term']} ×{u['count']}" for u in used[:12]))
+
+    ua = scan.get("unknown_arts") or []
+    if ua:
+        lines.append("\n**[A27] 바이블에 없는 초식 후보** (즉흥 작명 의심 — 작가 판단 필요)")
+        for u in ua:
+            lines.append(f"- \"{u['term']}\" × {u['count']}회")
+            for s in u.get("samples", []):
+                lines.append(f"    · `{s}`")
+
+    hp = scan.get("hanja_pairs") or []
+    if hp:
+        lines.append("\n**한자 병기 반복** (첫 등장만 병기 원칙)")
+        for h in hp:
+            lines.append(f"- {h['term']} × {h['count']}회")
+
+    lines.append("\n> 검사는 검출만 합니다. 수정 여부와 방식은 작가의 판단입니다.")
     return "\n".join(lines)
 
 

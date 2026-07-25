@@ -1,9 +1,21 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.4.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.5.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.5.0 (2026-07-25) — Martial Consistency Scanner
+  · STEP 3에 ⚔️ 초식 일관성 검사 신설 (API 미사용, 재현성 100%)
+    — 바이블 초식 사용 현황 / 무협 관용명 침입(A28 위반)
+    — 바이블 외 초식 후보(즉흥 작명 의심) / 한자 병기 반복
+    — A28 위반 또는 초식 0회면 자동 펼침 (조기 경보)
+  · REDO 재집필 프롬프트에 초식 검출 결과 자동 주입
+  · 캐릭터 바이블 스키마에 martial_system 필드 요구 추가
+    — v2.3.1이 이 필드를 읽었으나 생성 지시가 없어 항상 비었던
+      배선 구멍 마감 (사고 패턴 L)
+  · 🌱 IdeaSeed JSON 탭에 재료 손실 경고 신설 + 변환 프롬프트에
+    인물·초식·경지 창작 금지 룰 추가 (사고 패턴 M)
+
 v2.4.0 (2026-07-25) — Brief Material Containers (기획서 재료 그릇)
   · [사고 원인] 기획서 20,908자 중 12,000자만 앞·뒤 절단해 분석하고,
     발췌된 내용조차 담을 필드가 없어 별첨(무공·기보·무기)과
@@ -213,6 +225,8 @@ from engine_validator import (
     summarize_cumulative_25,
     scan_prose_style,               # v2.2.0 신규
     format_prose_scan_report,       # v2.2.0 신규
+    scan_martial_consistency,       # v2.5.0 신규
+    format_martial_scan_report,     # v2.5.0 신규
     diagnose_youth_target,          # v2.3.0 신규
     format_youth_diagnosis_report,  # v2.3.0 신규
 )
@@ -1100,6 +1114,16 @@ with tab1:
             "v2.0 콘셉트 카드로 자동 변환됩니다."
         )
 
+        # v2.5.0: 재료 손실 경고 (사고 패턴 M)
+        st.warning(
+            "**기획서 DOCX가 있으면 📄 기획서 업로드 탭을 쓰십시오.**\n\n"
+            "IdeaSeed JSON 스키마에는 인물 이름·문파명·초식명·별첨 무공 설정을 "
+            "담는 필드가 없습니다(분류 태그와 로그라인·raw_idea 중심 구조). "
+            "기획서를 이 경로로 넣으면 고유명사가 통과하지 못하고, "
+            "변환 단계에서 빈 필드가 무협 관용구로 채워집니다.\n\n"
+            "이 탭은 **기획서가 아직 없고 아이디어 단계일 때** 쓰는 경로입니다."
+        )
+
         col_seed1, col_seed2 = st.columns([3, 1])
 
         with col_seed1:
@@ -1861,6 +1885,38 @@ with tab3:
                 with st.expander(scan_label, expanded=False):
                     st.markdown(format_prose_scan_report(prose_scan, ep_number=selected_ep))
 
+                # ──── 초식 일관성 검사 (v2.5.0 — 정적 검출, API 미사용) ────
+                martial_scan = scan_martial_consistency(
+                    current_ep,
+                    st.session_state.martial_bible,
+                    ep_number=selected_ep,
+                )
+                if martial_scan["clean"]:
+                    m_label = "⚔️ 초식 일관성 — ✅ 통과"
+                elif martial_scan["generic_hits"]:
+                    m_label = (
+                        f"⚔️ 초식 일관성 — 🚨 관용명 "
+                        f"{len(martial_scan['generic_hits'])}종 검출 (A28 위반)"
+                    )
+                else:
+                    m_label = (
+                        f"⚔️ 초식 일관성 — ⚠️ {len(martial_scan['flags'])}건 경보"
+                    )
+                # A28 위반과 초식 0회는 조기 경보가 필요하므로 자동 펼침
+                _m_expand = bool(martial_scan["generic_hits"]) or (
+                    martial_scan["has_bible"] and martial_scan["art_mentions"] == 0
+                )
+                with st.expander(m_label, expanded=_m_expand):
+                    if martial_scan["bible_used"]:
+                        st.caption(
+                            "이 회차에 등장한 작가 설정 초식: "
+                            + ", ".join(
+                                f"{u['term']}×{u['count']}"
+                                for u in martial_scan["bible_used"][:10]
+                            )
+                        )
+                    st.markdown(format_martial_scan_report(martial_scan, ep_number=selected_ep))
+
                 # ──── 1020 타깃·장르 진단 (v2.3.0 — 정적 검출, API 미사용) ────
                 _is_youth = is_youth_target(st.session_state.concept_card)
                 youth_diag = diagnose_youth_target(
@@ -1930,6 +1986,18 @@ with tab3:
                                 if not redo_scan["clean"]:
                                     redo_parts.append(
                                         format_prose_scan_report(redo_scan, ep_number=selected_ep)
+                                    )
+                                # v2.5.0: 초식 일관성 검출 결과도 함께 주입
+                                redo_martial = scan_martial_consistency(
+                                    current_ep,
+                                    st.session_state.martial_bible,
+                                    ep_number=selected_ep,
+                                )
+                                if not redo_martial["clean"]:
+                                    redo_parts.append(
+                                        format_martial_scan_report(
+                                            redo_martial, ep_number=selected_ep
+                                        )
                                     )
                                 redo_diag = diagnose_youth_target(
                                     current_ep,

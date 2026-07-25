@@ -1,10 +1,21 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.1.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.5.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.5.0 (2026-07-25) — Martial Consistency Scanner + Path Guards
+  · engine_validator.py 연동: scan_martial_consistency() /
+    format_martial_scan_report() 신설 — A27·A28 정적 검사
+  · 캐릭터 바이블 스키마에 martial_system 필드 요구 추가
+    (affiliation / level / arts / weapon / limitation)
+    — v2.3.1이 이 필드를 읽었으나 생성 지시가 없어 항상 빈 구역이었던
+      배선 구멍 마감 (사고 패턴 L)
+  · build_wuxia_ideaseed_to_concept_prompt()에 창작 금지 룰 추가
+    — IdeaSeed에 인물 이름·초식명·경지가 없으면 빈 문자열로 둘 것.
+      그럴듯하게 채운 결과물이 빈 필드보다 위험하다 (사고 패턴 M)
+
 v2.4.0 (2026-07-25) — Brief Material Containers (기획서 재료 그릇)
   · [사고 원인] 기획서 20,908자 중 12,000자만 앞·뒤 발췌하고,
     발췌된 내용조차 담을 필드가 없어 별첨(무공·기보·무기)·
@@ -115,7 +126,7 @@ import json
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.4.0"
+ENGINE_VERSION = "v2.5.0"
 ENGINE_BUILD_DATE = "2026-07-25"
 
 # ═══════════════════════════════════════════════════
@@ -3535,13 +3546,22 @@ def build_character_bible_prompt(concept_card_json, profession_blocks=""):
 JSON 형식:
 
 {{
-  "protagonist": {{ ... 10개 필드 + 주인공 유형별 필드 }},
+  "protagonist": {{ ... 10개 필드 + 주인공 유형별 필드 + martial_system }},
   "female_lead": {{ ... }},
   "male_lead": {{ ... }},
   "villain": {{ ... }},
   "mentor": {{ ... }},
   "allies": [{{ ... }}, {{ ... }}]
 }}
+
+[모든 인물에 martial_system 필드를 반드시 포함할 것 — v2.4.0]
+  "martial_system": {{
+    "affiliation": "소속 문파·학원",
+    "level": "경지 또는 실력 수준 (컨셉 카드에 정의된 표현만 사용)",
+    "arts": ["이 인물이 쓰는 초식·무공 이름 (초식 바이블·컨셉 카드에 있는 것만)"],
+    "weapon": "주 무기",
+    "limitation": "약점·대가·못 하는 것"
+  }}
 
 JSON만 반환."""
 
@@ -4668,6 +4688,22 @@ def build_wuxia_ideaseed_to_concept_prompt(ideaseed_json_str, pending_decisions_
 - tone_preset은 위 목록의 키 중 하나여야 한다. 목록에 없는
   표현을 쓰면 엔진이 톤 블록을 주입하지 못한다.
   (narrative_tone은 자유 서술 가능. tone_preset은 enum 고정.)
+
+## 🚨 인물·초식 창작 절대 금지 (v2.5.0 — 사고 재발 방지)
+IdeaSeed JSON 스키마에는 인물 이름·문파명·초식명을 담는 필드가
+없다(분류 태그와 로그라인·raw_idea 중심 구조). 따라서 이 변환에서
+아래를 반드시 지킬 것.
+
+- **IdeaSeed에 인물 이름이 없으면 이름을 만들지 말 것.**
+  protagonist.name·antagonist.name·key_supporting_chars[].name을
+  빈 문자열("")로 두고, 작가가 채워야 할 항목으로 남긴다.
+- **초식명·문파명·조직명도 동일하다.** 없으면 빈 문자열이다.
+  무협 관용 명칭(자하신공·태극혼원공·철위국류)을 지어 넣지 말 것.
+- **경지 체계를 창작하지 말 것.** IdeaSeed에 없으면 빈 문자열이다.
+  (기초경·통맥경·화경·무신경 같은 등급을 임의로 만들면 인물 설정
+   전체가 그 창작에 끌려가 다른 작품이 된다.)
+- 빈 필드가 많은 것은 정상이다. 빈 필드는 작가가 기획서로 채운다.
+  **그럴듯하게 채운 결과물이 빈 필드보다 훨씬 위험하다.**
 
 ## 출력 JSON 스키마
 
