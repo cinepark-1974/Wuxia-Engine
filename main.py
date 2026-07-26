@@ -1,9 +1,25 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.5.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.6.1 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.6.1 (2026-07-26) — 페이지 여백 조정
+  · docx_builder.py v2.2.1 연동 — A4 여백 2.5cm → 2.0cm (상·하·좌·우)
+    회차·시즌·기획서 DOCX 공통
+
+v2.6.0 (2026-07-26) — Manuscript Layout Pack (원고 서식)
+  · docx_builder.py v2.2.0 연동 — 함초롬바탕 스타일 체계
+    — 문서 기본값 + Normal + '에피소드 제목' + '웹소설본문' 4단 스타일
+    — 본문 run에 폰트를 박지 않으므로 워드에서 스타일 하나만 고치면
+      원고 전체 서식이 한 번에 바뀜 (작가 교정 파일 방식)
+  · 곧은 따옴표(" ') → 둥근 따옴표(“ ” ‘ ’) 자동 변환
+    — 곧은 따옴표는 AI 생성 신호로 읽히므로 출력 단계에서 정규화
+  · 머리말 〈작품 제목〉 + 꼬리말 페이지 번호 신설
+  · [수정] 회차 DOCX 제목 오인식 — 본문 첫 문장이 제목으로 승격되고
+    본문에서 사라지던 문제 (아미고 EP001 사례). 제목 판별 규칙 신설
+  · DOCX 다운로드 시 회차 플롯의 title을 제목으로 사용
+
 v2.5.0 (2026-07-25) — Martial Consistency Scanner
   · STEP 3에 ⚔️ 초식 일관성 검사 신설 (API 미사용, 재현성 100%)
     — 바이블 초식 사용 현황 / 무협 관용명 침입(A28 위반)
@@ -1725,12 +1741,20 @@ with tab3:
                     try:
                         # rating 파라미터: "19" / "15" 형식 (docx_builder 규약)
                         rating_code = "19" if rating == "19금" else "15"
+                        # v2.6.0: 회차 플롯에 제목이 있으면 원고 제목으로 사용
+                        # (없으면 docx_builder가 본문 첫 줄을 판정하거나
+                        #  'EP 01.' 형태를 자동 생성)
+                        _plot = st.session_state.episode_plots.get(selected_ep)
+                        plot_title = (
+                            _plot.get("title", "") if isinstance(_plot, dict) else ""
+                        ) or None
                         docx_bytes = build_episode_docx(
                             current_ep,
                             selected_ep,
                             concept=st.session_state.concept_card,
                             rating=rating_code,
                             platform=platform,
+                            title_override=plot_title,
                         )
                         title = st.session_state.concept_card.get("title", "wuxia")
                         safe_title = re.sub(r"[^\w\-]", "_", title)

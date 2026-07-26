@@ -1,10 +1,18 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.5.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.6.1 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.6.1 (2026-07-26) — 페이지 여백 조정
+  · docx_builder.py v2.2.1 연동 — A4 여백 2.5cm → 2.0cm
+    (버전 상수만 동기화. 이 파일의 룰 변경 없음)
+
+v2.6.0 (2026-07-26) — Manuscript Layout Pack (원고 서식)
+  · docx_builder.py v2.2.0 연동 — 이 파일의 룰 변경은 없음
+    (버전 상수만 동기화. 서식 변경 상세는 docx_builder.py 헤더 참조)
+
 v2.5.0 (2026-07-25) — Martial Consistency Scanner + Path Guards
   · engine_validator.py 연동: scan_martial_consistency() /
     format_martial_scan_report() 신설 — A27·A28 정적 검사
@@ -126,8 +134,8 @@ import json
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.5.0"
-ENGINE_BUILD_DATE = "2026-07-25"
+ENGINE_VERSION = "v2.6.1"
+ENGINE_BUILD_DATE = "2026-07-26"
 
 # ═══════════════════════════════════════════════════
 # SYSTEM PROMPT — 무협 웹소설 작가 페르소나
