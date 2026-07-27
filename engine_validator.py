@@ -1,10 +1,33 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.5.0 — engine_validator.py
+👖 BLUE JEANS WUXIA ENGINE v2.6.0 — engine_validator.py
 ═══════════════════════════════════════════════════════════
 회차 자가 검수 · 재료 활용 검증 · 전환점 자동 감지 · 문체 정적 스캐너
-· 초식 일관성 정적 검사
+· 초식 일관성 정적 검사 · 장르 밀도 정적 검사
 
 [변경 이력]
+v2.6.0 (2026-07-26) — Genre Density Scanner + 감점 방향 반전
+  · [사고 패턴 N — 검수기가 정답을 오답으로 판정] 아미고 실측:
+      작가 원고 EP2 (초식 9종·병기 16회) → MISE_EN_SCENE 80점
+                                          + "글로벌 친화 위반" 감점
+      엔진 원고 EP2 (초식 0종·병기 0회)  → MISE_EN_SCENE 90점, 무지적
+    검수기가 장르가 살아 있는 원고를 감점하고 장르가 죽은 원고에
+    최고점을 줬다. 엔진이 잘못된 방향으로 최적화되고 있었다.
+  · _score_mise_en_scene 한자 병기 감점 로직 **반전**
+    — 기존: >8회 -10점 (과다 감점만 존재, 부재는 무벌점)
+    — 신설: <4회 -12점(장르 신호 부족) / 6~16회 +8점(정상)
+            >22회 -6점(반복 병기 의심)
+  · _score_mise_en_scene에 초식 명명 가점 신설 — 이름 붙은 무공이
+    본문에 몇 종 등장하는지를 직접 계측 (기존에는 동작 동사만 계측해
+    이름 없는 격투도 만점을 받을 수 있었다)
+  · scan_wuxia_density() 신설 — A29~A31 정량 검사.
+    7개 쿼터(명명 초식 / 병기 / 3박자 / 문파 / 내공 / 의성어 / 경지)
+    EP1~EP4는 강화 임계값 적용
+  · format_wuxia_density_report() 신설 — 쿼터 달성표 + 미달 항목
+  · _collect_bible_terms 오탐 수정 — 1~2자 용어("기", "도")가
+    한글 음절 어디에나 걸려 art_mentions가 과대 계상되던 문제
+    (엔진 EP2가 "기(氣)x31"로 잡혔으나 실제 병기는 0회였음)
+  · 설계 원칙 K 유지 — 검출만 하고 본문은 수정하지 않는다
+
 v2.5.0 (2026-07-25) — Martial Consistency Scanner
   · scan_martial_consistency() 신설 — A27(초식 일관성)·A28(작가 설정
     우선) 정적 검사. LLM 미사용, 재현성 100%
@@ -67,6 +90,154 @@ v2.0 (2026-05) — 초기 자가 검수 엔진
 
 import re
 from typing import List, Dict, Optional, Tuple
+
+# ═══════════════════════════════════════════════════
+# 장르 밀도 계측 상수 (A29~A31) — v2.6.0 신규
+# 무협의 장르 신호는 "동작"이 아니라 "이름"이다.
+# 기존 검수는 동작 동사만 계측해 이름 없는 현대 격투도
+# 만점을 받을 수 있었다. 이 상수군이 그 구멍을 막는다.
+# ═══════════════════════════════════════════════════
+
+# 무공 이름 접미어 — 한글만 써도 무공으로 판정
+_ART_NAME_TAILS = (
+    "신공", "심법", "검법", "도법", "장법", "권법", "지법", "보법",
+    "신법", "각법", "창법", "편법", "검술", "도술", "창술", "권술",
+    "장풍", "진경", "대법", "절기", "초식", "검결", "검진", "진법",
+    "경공술", "축지법", "조식", "연환격", "무술", "연검술",
+)
+_ART_TAIL_RE = re.compile(
+    r"([가-힣]{2,8}(?:" + "|".join(_ART_NAME_TAILS) + r"))"
+)
+
+# 한자 병기형 고유명사 — 한글(한자 3자 이상)
+_HANJA_PAIR_RE = re.compile(r"([가-힣]{2,10})\s*\(([\u4e00-\u9fff]{2,10})\)")
+
+# 병기 고유명사 중 무공이 아닌 범주 (학교·사찰·문파·지명·대회)
+# 주의: "도"는 화산장풍도 같은 무공명 꼬리이므로 제외 목록에 넣지 않는다.
+_NON_ART_TAILS = (
+    "고", "교", "사", "파", "원", "궁", "성", "산", "촌", "각",
+    "회", "대전", "대회", "관", "루", "방", "맹", "부", "군",
+)
+
+# 내공·기 어휘 (A31)
+_NEIGONG_WORDS = [
+    "내공", "기맥", "단전", "운기", "진기", "기세", "살기", "검기",
+    "도기", "장력", "축기", "호흡법", "기(氣)", "기운", "혈도",
+    "주화입마", "운기조식", "심법", "기의 흐름",
+]
+
+# 경지·서열 어휘 (A31)
+_REALM_WORDS = [
+    "화경", "절정", "초절정", "현경", "생사경", "자연경", "무신경",
+    "삼화취정", "등봉조극", "통맥", "기초경", "입문", "대성",
+    "경지", "고수", "일류", "이류", "삼류", "절대고수", "화후",
+]
+
+# 문파·계보 (A31) — 바이블 문파와 합집합으로 사용
+_GENERIC_FACTIONS = [
+    "무당파", "화산파", "아미파", "소림", "곤륜", "개방", "점창",
+    "종남", "청성", "공동", "해남", "장백", "마교", "천마신교",
+    "구파일방", "오대세가", "남궁", "사파", "정파", "무림맹",
+]
+
+# 의성어 (A31) — 타격·풍압·검격
+_ONOMATOPOEIA = [
+    "휙", "휘릭", "휘잉", "획", "쏴아", "쏴", "쐐액", "쉬익", "쉭",
+    "붕", "쩌렁", "쩌렁쩌렁", "쿵", "쾅", "퍽", "팍", "파앙", "챙",
+    "캉", "따앙", "철컥", "우드득", "우웅", "웅", "쌩", "빵빵",
+    "다다다닥", "후다다닥", "촥", "스윽", "탁", "툭",
+]
+# 인용부호로 감싼 짧은 한글 (의성어 후보)
+_QUOTED_SHORT_RE = re.compile(r"[\u2018\u201c'\"]([가-힣]{1,6})[\u2019\u201d'\"]")
+
+# A30 ③해설 신호어 — 무공의 원리·귀속·장단점을 설명하는 표현
+_EXPLAIN_MARKERS = [
+    "무공이었다", "무공이다", "무공으로", "특화", "핵심은", "핵심이",
+    "원리", "계열", "계보", "자랑하는", "비롯", "단점", "장점",
+    "약하", "강하", "대가", "한계", "이용해", "응용", "기반",
+    "연구하여", "연구해", "만든", "본류", "갈래", "비법",
+    "보법이었다", "권법이었다", "술이었다", "기술이다", "뜻이었다",
+    "능력을", "경지", "따라", "덕분", "때문",
+]
+
+
+def _count_three_beat(text: str, named_arts: list) -> list:
+    """A30 3박자(명명→시연→해설) 완주 무공을 판정 — v2.6.0 신규.
+
+    무공명 첫 등장 지점 앞 200자·뒤 500자 창에서 해설 신호어를
+    2개 이상 찾으면 완주로 본다. 휴리스틱이며 진단용이다.
+
+    Returns:
+        완주로 판정된 무공명(한글 표기) 리스트
+    """
+    out = []
+    if not text or not named_arts:
+        return out
+    for art in named_arts:
+        base = re.sub(r"\s*\([^)]*\)\s*", "", art).strip()
+        if not base:
+            continue
+        idx = text.find(base)
+        if idx < 0:
+            continue
+        window = text[max(0, idx - 200): idx + 500]
+        hits = [k for k in _EXPLAIN_MARKERS if k in window]
+        if len(hits) >= 2:
+            out.append(base)
+    return out
+
+
+def _extract_named_arts(text: str, bible_arts: Optional[set] = None) -> list:
+    """본문에서 '이름이 붙은 무공'을 추출 — v2.6.0 신규.
+
+    세 경로의 합집합으로 판정한다.
+      ① 초식 바이블에 등재된 무공명 (가장 신뢰도 높음)
+      ② 무공 접미어형 (당랑연검술·청수유수권·축지법)
+      ③ 한자 병기형 중 무공으로 보이는 것 (유수화풍(流水和風))
+         — 학교·사찰·문파·대회 접미어는 제외
+
+    휴리스틱이므로 소수의 오탐·미탐이 있다. 진단 지표이며
+    최종 판단은 작가의 것이다 (설계 원칙 K).
+
+    Returns:
+        정렬된 무공명 리스트 (중복 제거, 한자 병기 표기 우선)
+    """
+    if not text or not isinstance(text, str):
+        return []
+
+    found = {}   # 한글 표기 → 표시용 표기
+
+    def _put(kor, display=None):
+        kor = (kor or "").strip()
+        if len(kor) < 2:
+            return
+        prev = found.get(kor)
+        if display and (not prev or len(display) > len(prev)):
+            found[kor] = display
+        else:
+            found.setdefault(kor, display or kor)
+
+    # ① 바이블 등재 무공
+    for art in sorted(bible_arts or set(), key=len, reverse=True):
+        base = re.sub(r"\s*\([^)]*\)\s*", "", art).strip()
+        if len(base) < 2:
+            continue
+        if base in text or art in text:
+            _put(base, art if "(" in art else None)
+
+    # ② 무공 접미어형
+    for m in _ART_TAIL_RE.findall(text):
+        _put(m)
+
+    # ③ 한자 병기형 (무공 아닌 범주 제외)
+    for kor, han in _HANJA_PAIR_RE.findall(text):
+        if len(kor) < 2:
+            continue
+        if kor.endswith(_NON_ART_TAILS):
+            continue
+        _put(kor, f"{kor}({han})")
+
+    return sorted(found.values())
 
 # Wuxia Engine 데이터 모듈 import
 try:
@@ -538,13 +709,22 @@ def _score_mise_en_scene(text: str) -> dict:
     martial_keywords·visual_keywords·sensory_keywords 모두 어간 + 주요 활용형 등록.
     어간만 등록 시 작가가 자연스럽게 쓰는 활용형이 검출되지 않아 거짓 저점 발생.
     (WebNovel v3.3 사고 사례에서 발견된 패턴)
+
+    [v2.6.0 장르 밀도 반영 — 사고 패턴 N]
+    기존 배점은 동작 동사만 계측해 이름 없는 현대 격투도 고득점했다.
+    실측: 초식 0종·병기 0회 원고가 90점, 초식 9종·병기 16회 작가 원고가
+    80점. 방향이 반대였다. v2.6.0에서 세 요소를 추가·반전한다.
+      · 이름 붙은 무공 종수 (A29)   — 0종이면 큰 감점
+      · A30 3박자 해설 유무          — 무협 독자의 과금 지점
+      · 한자 병기 감점 방향 반전     — 부재가 위반, 반복이 위반
+    상단 포화를 막기 위해 기본 점수를 60 → 45로 낮췄다.
     """
     if not text:
         return {"score": 0, "issues": ["본문 없음"], "evidence": []}
 
     issues = []
     evidence = []
-    score = 60  # 기본값
+    score = 45  # 기본값 (v2.6.0: 장르 밀도 항목 신설로 하향)
 
     # 무공 시전 묘사 키워드 — v2.1.0 활용형 보강
     martial_keywords = [
@@ -569,10 +749,10 @@ def _score_mise_en_scene(text: str) -> dict:
     ]
     martial_hits = sum(1 for kw in martial_keywords if kw in text)
     if martial_hits >= 5:
-        score += 15
+        score += 12
         evidence.append(f"무공 시전 묘사 풍부 ({martial_hits}회)")
     elif martial_hits >= 2:
-        score += 8
+        score += 6
         evidence.append(f"무공 묘사 적정 ({martial_hits}회)")
     else:
         issues.append("무공 시전 묘사 부족 (전투 회차라면 보강 필요)")
@@ -596,10 +776,10 @@ def _score_mise_en_scene(text: str) -> dict:
     ]
     visual_hits = sum(1 for kw in visual_keywords if kw in text)
     if visual_hits >= 5:
-        score += 10
+        score += 8
         evidence.append(f"시각적 묘사 충분 ({visual_hits}회)")
     elif visual_hits >= 2:
-        score += 5
+        score += 4
 
     # 청각·후각 등 비시각 감각 — v2.1.0 활용형 보강
     sensory_keywords = [
@@ -615,15 +795,70 @@ def _score_mise_en_scene(text: str) -> dict:
         score += 5
         evidence.append("다감각 묘사 포함")
 
-    # 한자 병기 과다 검출 (글로벌 친화 위반)
+    # ── 이름이 붙은 무공 계측 (v2.6.0 신설) ──
+    # [왜 필요한가] 기존에는 동작 동사(휘둘렀다·베었다)만 계측했다.
+    # 그래서 "관절을 꺾고 명치를 눌렀다" 같은 현대 격투도 만점을 받았다.
+    # 무협의 장르 신호는 동작이 아니라 **이름**이다.
     import re
-    chinese_count = len(re.findall(r'\([\u4e00-\u9fff]+\)', text))
-    if chinese_count > 8:
+    named_list = _extract_named_arts(text)
+    named_arts = set(named_list)
+    named_count = len(named_arts)
+    if named_count >= 5:
+        score += 18
+        evidence.append(f"이름 붙은 무공 {named_count}종 — 장르 신호 충분")
+    elif named_count >= 3:
+        score += 10
+        evidence.append(f"이름 붙은 무공 {named_count}종")
+    elif named_count >= 1:
+        score += 3
+        issues.append(f"이름 붙은 무공 {named_count}종 — 장르 밀도 부족 (A29: 3종 이상)")
+    else:
+        score -= 15
+        issues.append(
+            "이름 붙은 무공 0종 — A29 위반. 무공 장면이 이름 없는 격투로 "
+            "처리됐을 가능성이 큽니다."
+        )
+
+    # ── A30 3박자 해설 (v2.6.0 신설) ──
+    # 무협 독자가 지갑을 여는 지점은 ③해설(원리·문파 귀속·장단점)이다.
+    # 엔진 원고에서 가장 자주 통째로 빠지는 요소다.
+    three_beat = _count_three_beat(text, named_list)
+    if len(three_beat) >= 2:
+        score += 10
+        evidence.append(f"A30 3박자 완주 {len(three_beat)}회")
+    elif len(three_beat) == 1:
+        score += 4
+        evidence.append("A30 3박자 완주 1회")
+    else:
         score -= 10
-        issues.append(f"한자 병기 과다 ({chinese_count}회) — 글로벌 영문 친화 위반")
-    elif chinese_count > 4:
-        score -= 3
-        issues.append(f"한자 병기 약간 많음 ({chinese_count}회)")
+        issues.append(
+            "A30 위반 — 3박자 완주 0회. 무공의 원리·문파 귀속·장단점 해설이 "
+            "없습니다."
+        )
+
+    # ── 한자 병기 (v2.6.0 감점 방향 반전) ──
+    # 기존 로직은 과다만 감점하고 부재는 무벌점이었다. 그 결과
+    # 병기 0회 원고가 병기 16회 작가 원고보다 높은 점수를 받았다.
+    # 무협에서 고유명사 병기는 억제 대상이 아니라 장르 필수 신호다.
+    # 줄여야 할 것은 총량이 아니라 같은 용어의 반복 병기다 (A15).
+    chinese_count = len(re.findall(r'\([\u4e00-\u9fff]+\)', text))
+    if chinese_count < 4:
+        score -= 12
+        issues.append(
+            f"한자 병기 {chinese_count}회 — A15·A29 위반. 고유명사 병기가 "
+            f"부족해 무협으로 읽히지 않습니다 (정상 8~15회)."
+        )
+    elif chinese_count <= 16:
+        score += 8
+        evidence.append(f"한자 병기 {chinese_count}회 — 정상 밀도")
+    elif chinese_count <= 22:
+        evidence.append(f"한자 병기 {chinese_count}회 — 상한 근접")
+    else:
+        score -= 6
+        issues.append(
+            f"한자 병기 {chinese_count}회 — 과다. 같은 용어의 반복 병기 여부를 "
+            f"확인해 주십시오 (재등장 시 한글만)."
+        )
 
     score = max(0, min(100, score))
 
@@ -634,6 +869,10 @@ def _score_mise_en_scene(text: str) -> dict:
         "martial_hits": martial_hits,
         "visual_hits": visual_hits,
         "chinese_brackets": chinese_count,
+        "named_arts": sorted(named_arts),
+        "named_art_count": named_count,
+        "three_beat_arts": three_beat,
+        "three_beat_count": len(three_beat),
     }
 
 
@@ -1372,6 +1611,7 @@ def _collect_bible_terms(martial_bible: dict) -> dict:
          "locked": set, "all": set, "display": {정규화형: 원문}}
     """
     out = {"arts": set(), "artifacts": set(), "weapons": set(),
+           "context": set(),
            "locked": set(), "all": set(), "display": {}}
     if not isinstance(martial_bible, dict):
         return out
@@ -1385,8 +1625,12 @@ def _collect_bible_terms(martial_bible: dict) -> dict:
         out[bucket].add(raw)
         out["all"].add(raw)
         # 한자 병기를 떼어낸 한글 표기도 별칭으로 등록
+        # v2.6.0: 1자 별칭은 등록하지 않는다.
+        #   "기(氣)"의 base "기"가 기운·기세·경기 등 모든 음절에 걸려
+        #   art_mentions가 과대 계상됐다 (엔진 EP2가 실제 병기 0회인데
+        #   "기(氣)x31"로 잡힌 거짓 신호 — 사고 패턴 I 계열)
         base = re.sub(r"\s*\([^)]*\)\s*", "", raw).strip()
-        if base and base != raw:
+        if base and base != raw and len(base) >= 2:
             out[bucket].add(base)
             out["all"].add(base)
             out["display"][base] = raw
@@ -1398,8 +1642,16 @@ def _collect_bible_terms(martial_bible: dict) -> dict:
     for grp in martial_bible.get("faction_arts") or []:
         if not isinstance(grp, dict):
             continue
-        _add("arts", grp.get("signature"))
-        _add("arts", grp.get("training"))
+        # v2.7.0: signature·training은 서술 필드다. 초식명 버킷에
+        #   넣으면 문장이 초식으로 등록돼 art_mentions가 과대 계상되고
+        #   A28 철자 고정 목록 40칸을 잡아먹는다. (실측 오염 8건)
+        #   초식명 형식을 통과한 것만 등록하고, 나머지는 context로 보낸다.
+        for _fld in ("signature", "training"):
+            _v = grp.get(_fld)
+            if _is_valid_art_name(_v):
+                _add("arts", _v)
+            elif isinstance(_v, str) and _v.strip():
+                out["context"].add(_v.strip())
         for art in grp.get("arts") or []:
             if isinstance(art, dict):
                 _add("arts", art.get("name"))
@@ -1411,7 +1663,9 @@ def _collect_bible_terms(martial_bible: dict) -> dict:
             _add("weapons", item.get("name"))
     for item in martial_bible.get("forbidden") or []:
         if isinstance(item, dict):
-            _add("arts", item.get("name"))
+            # v2.7.0: forbidden.name도 서술구가 들어온다 ("심각한 부상 유발")
+            if _is_valid_art_name(item.get("name")):
+                _add("arts", item.get("name"))
     for t in martial_bible.get("author_locked_terms") or []:
         _add("locked", t if isinstance(t, str) else "")
     return out
@@ -1462,6 +1716,9 @@ def scan_martial_consistency(text: str, martial_bible: dict = None,
     # ── 1) 바이블 초식 사용 현황 ──
     used, unused = [], []
     for t in sorted(terms["arts"], key=len, reverse=True):
+        # v2.6.0: 1자 용어는 음절 단위 오탐을 만들므로 계측 제외
+        if len(t) < 2:
+            continue
         c = text.count(t)
         if c > 0:
             used.append({"term": terms["display"].get(t, t), "count": c})
@@ -1541,9 +1798,15 @@ def scan_martial_consistency(text: str, martial_bible: dict = None,
         result["flags"].append(
             f"A27 주의 — 바이블에 없는 초식 후보가 {len(result['unknown_arts'])}종 검출됐습니다. 즉흥 작명 여부를 확인해 주십시오."
         )
-    if total_hanja > 8:
+    if total_hanja < 4:
         result["flags"].append(
-            f"한자 병기 {total_hanja}회 — 첫 등장만 병기 원칙(>8회 감점) 초과입니다."
+            f"A15·A29 경보 — 한자 병기 {total_hanja}회. 고유명사 병기가 부족해 "
+            f"무협 장르로 읽히지 않을 위험이 있습니다 (정상 8~15회)."
+        )
+    elif total_hanja > 22:
+        result["flags"].append(
+            f"한자 병기 {total_hanja}회 — 총량 과다. 같은 용어의 반복 병기 여부를 "
+            f"확인해 주십시오 (재등장 시 한글만)."
         )
     if not result["has_bible"]:
         result["flags"].append(
@@ -1600,6 +1863,632 @@ def format_martial_scan_report(scan: dict, ep_number: int = 0) -> str:
     return "\n".join(lines)
 
 
+# ═══════════════════════════════════════════════════
+# 장르 밀도 정적 검사 (A29·A30·A31) — v2.6.0 신규
+#
+# [왜 필요한가]
+# 아미고 EP1·EP2에서 문장·감정·대사가 모두 우수한데 무협으로
+# 읽히지 않는 사고가 발생했다. 원인은 무공 명명 0종·한자 병기
+# 0회·기 어휘 0회였다. 그런데 기존 5축 검수는 그 회차에
+# MISE_EN_SCENE 90점을 줬다. 장르 소실을 탐지할 수단이 없었다.
+#
+# 이 스캐너는 A29 쿼터표를 그대로 계측한다. LLM 미사용,
+# 재현성 100%. 검출만 하고 본문은 수정하지 않는다 (설계 원칙 K).
+# ═══════════════════════════════════════════════════
+
+# A29 쿼터 임계값 — (EP1~EP4 강화값, EP5 이후 기본값)
+WUXIA_DENSITY_QUOTAS = [
+    ("named_arts",  "이름 붙은 무공·초식", 5, 3),
+    ("hanja",       "고유명사 한자 병기",   8, 6),
+    ("three_beat",  "3박자 완주 (명명→시연→해설)", 2, 1),
+    ("factions",    "문파·계보 귀속",       3, 2),
+    ("neigong",     "내공·기 가시화",       4, 3),
+    ("onomatopoeia", "타격·풍압 의성어",     3, 2),
+    ("realms",      "경지·서열 노출",       2, 1),
+]
+
+# 명명 회피 관용구 — A29 절대 금지 항목
+_NAMING_EVASION_PATTERNS = [
+    "초식이라 부를 것도", "초식이라고 할 것도", "이름을 붙일 것도",
+    "이름이 없었다", "이름도 없었다", "그냥 됐다", "그냥 잡혔",
+    "그냥 되는", "무공이라 할 수도", "이름 없는",
+]
+
+
+def scan_wuxia_density(text: str, ep_number: int = 0,
+                       martial_bible: dict = None) -> dict:
+    """A29~A31 장르 밀도 정량 검사 — v2.6.0 신규.
+
+    Args:
+        text: 회차 본문
+        ep_number: 회차 번호. 1~4면 도입부 강화 임계값을 적용한다.
+        martial_bible: 초식 바이블 (있으면 무공·문파 판정 정확도 상승)
+
+    Returns:
+        {
+          "ep_number": int,
+          "is_opening": bool,             # EP1~EP4 여부
+          "metrics": {키: 값},
+          "quotas": [{"key","label","value","target","ok"}],
+          "achieved": int,                # 충족 쿼터 수 (0~7)
+          "total": 7,
+          "grade": "PASS" | "WARN" | "FAIL",
+          "named_arts": [str],            # 검출된 무공명
+          "evasion_hits": [{"phrase","samples"}],   # 명명 회피 관용구
+          "flags": [str],
+        }
+    """
+    result = {
+        "ep_number": ep_number,
+        "is_opening": bool(1 <= ep_number <= 4),
+        "metrics": {}, "quotas": [], "achieved": 0,
+        "total": len(WUXIA_DENSITY_QUOTAS),
+        "grade": "FAIL", "named_arts": [], "evasion_hits": [], "flags": [],
+    }
+    if not text or not isinstance(text, str):
+        return result
+
+    terms = _collect_bible_terms(martial_bible or {})
+
+    # ── ① 이름 붙은 무공 ──
+    named = _extract_named_arts(text, terms.get("arts"))
+    result["named_arts"] = named
+    m_named = len(named)
+
+    # ── ② 고유명사 한자 병기 (총 출현 수) ──
+    hanja_all = _HANJA_PAIR_RE.findall(text)
+    m_hanja = len(hanja_all)
+    # 반복 병기 계측 (A15 — 줄여야 할 것은 총량이 아니라 반복이다)
+    pair_counts = {}
+    for kor, han in hanja_all:
+        pair_counts[f"{kor}({han})"] = pair_counts.get(f"{kor}({han})", 0) + 1
+    repeated = {k: v for k, v in pair_counts.items() if v > 1}
+
+    # ── ③ A30 3박자 완주 ──
+    beat_detail = _count_three_beat(text, named)
+    m_three = len(beat_detail)
+
+    # ── ④ 문파·계보 귀속 ──
+    faction_pool = set(_GENERIC_FACTIONS)
+    for grp in (martial_bible or {}).get("faction_arts") or []:
+        if isinstance(grp, dict) and grp.get("faction"):
+            for piece in re.split(r"[/·,]", str(grp["faction"])):
+                piece = re.sub(r"\s*\([^)]*\)\s*", "", piece).strip()
+                if len(piece) >= 2:
+                    faction_pool.add(piece)
+    factions_found = sorted({f for f in faction_pool if f in text})
+    m_factions = len(factions_found)
+
+    # ── ⑤ 내공·기 가시화 ──
+    m_neigong = sum(text.count(w) for w in _NEIGONG_WORDS)
+
+    # ── ⑥ 의성어 ──
+    onom = 0
+    for w in _ONOMATOPOEIA:
+        onom += len(re.findall(r"(?<![가-힣])" + re.escape(w) + r"(?![가-힣])", text))
+    quoted = [q for q in _QUOTED_SHORT_RE.findall(text)
+              if not q.endswith(("다", "요", "까", "네", "죠", "야", "군"))]
+    m_onom = max(onom, len(quoted)) if quoted else onom
+
+    # ── ⑦ 경지·서열 ──
+    realm_found = sorted({w for w in _REALM_WORDS if w in text})
+    m_realms = sum(text.count(w) for w in realm_found)
+
+    result["metrics"] = {
+        "named_arts": m_named, "hanja": m_hanja, "three_beat": m_three,
+        "factions": m_factions, "neigong": m_neigong,
+        "onomatopoeia": m_onom, "realms": m_realms,
+        "hanja_repeated": repeated,
+        "factions_found": factions_found,
+        "three_beat_arts": beat_detail,
+        "realm_words": realm_found,
+    }
+
+    # ── 쿼터 판정 ──
+    for key, label, open_t, base_t in WUXIA_DENSITY_QUOTAS:
+        target = open_t if result["is_opening"] else base_t
+        value = result["metrics"].get(key, 0)
+        ok = value >= target
+        result["quotas"].append({
+            "key": key, "label": label, "value": value,
+            "target": target, "ok": ok,
+        })
+        if ok:
+            result["achieved"] += 1
+
+    # ── 명명 회피 관용구 검출 ──
+    for p in _NAMING_EVASION_PATTERNS:
+        if p in text:
+            result["evasion_hits"].append({
+                "phrase": p, "samples": _find_lines_with(text, p)[:2],
+            })
+
+    # ── 등급 ──
+    total = result["total"]
+    ach = result["achieved"]
+    if ach >= total - 1:
+        result["grade"] = "PASS"
+    elif ach >= total - 3:
+        result["grade"] = "WARN"
+    else:
+        result["grade"] = "FAIL"
+
+    # 이름 붙은 무공 0종은 다른 지표와 무관하게 FAIL
+    if m_named == 0:
+        result["grade"] = "FAIL"
+
+    # ── 경보 ──
+    if m_named == 0:
+        result["flags"].append(
+            "A29 치명 위반 — 이름 붙은 무공이 0종입니다. 무공 장면이 "
+            "이름 없는 격투로 처리됐습니다. 이 회차는 무협으로 읽히지 않습니다."
+        )
+    elif result["is_opening"] and m_named < 5:
+        result["flags"].append(
+            f"A29 위반 — 도입 4화 구간인데 이름 붙은 무공이 {m_named}종입니다 "
+            f"(목표 5종). 독자는 1~4화에서 장르를 판정합니다."
+        )
+    if m_hanja < 4:
+        result["flags"].append(
+            f"A15·A29 위반 — 한자 병기 {m_hanja}회. 고유명사 병기가 부족합니다 "
+            f"(정상 8~15회)."
+        )
+    if m_three == 0:
+        result["flags"].append(
+            "A30 위반 — 3박자 완주 0회. 무공의 원리·문파 귀속·장단점을 "
+            "설명하는 해설이 없습니다. 무협 독자의 과금 지점이 비어 있습니다."
+        )
+    if result["evasion_hits"]:
+        result["flags"].append(
+            "A29 금지 표현 — 명명 회피 관용구가 검출됐습니다. 무공에 이름을 "
+            "붙이거나, 다른 인물이 이름을 붙여주는 대사를 넣어 주십시오."
+        )
+    if repeated:
+        top = ", ".join(f"{k}×{v}" for k, v in
+                        sorted(repeated.items(), key=lambda x: -x[1])[:5])
+        result["flags"].append(
+            f"A15 반복 병기 — 재등장 시에는 한글만 씁니다: {top}"
+        )
+    if m_factions <= 1:
+        result["flags"].append(
+            f"A31 주의 — 문파·계보 언급이 {m_factions}곳입니다. 우리 편만 "
+            f"나오면 강호가 좁아집니다."
+        )
+
+    return result
+
+
+def format_wuxia_density_report(scan: dict, ep_number: int = 0) -> str:
+    """장르 밀도 검사 결과를 작가용 마크다운 리포트로 변환.
+
+    UI 표시와 REDO 프롬프트 주입에 공용으로 쓴다.
+    """
+    if not scan:
+        return ""
+
+    ep = scan.get("ep_number") or ep_number
+    grade = scan.get("grade", "?")
+    icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "🚨"}.get(grade, "•")
+    scope = "도입 4화 강화 기준" if scan.get("is_opening") else "일반 회차 기준"
+
+    lines = [
+        f"### {icon} 무협 장르 밀도 (A29~A31)" + (f" — EP{ep}" if ep else ""),
+        f"**{grade}** · 쿼터 {scan.get('achieved', 0)}/{scan.get('total', 7)} 충족 · {scope}",
+        "",
+        "| 항목 | 실측 | 목표 | 판정 |",
+        "|---|---|---|---|",
+    ]
+    for q in scan.get("quotas", []):
+        mark = "○" if q["ok"] else "**✗**"
+        lines.append(f"| {q['label']} | {q['value']} | {q['target']} | {mark} |")
+
+    for f in scan.get("flags", []):
+        lines.append(f"\n- {f}")
+
+    named = scan.get("named_arts") or []
+    if named:
+        lines.append(f"\n**검출된 무공명 ({len(named)}종)**")
+        lines.append(", ".join(named[:15]))
+    else:
+        lines.append("\n**검출된 무공명** — 없음")
+
+    m = scan.get("metrics") or {}
+    if m.get("three_beat_arts"):
+        lines.append("\n**3박자 완주로 판정된 무공**")
+        lines.append(", ".join(m["three_beat_arts"][:10]))
+    if m.get("factions_found"):
+        lines.append("\n**언급된 문파·계보**")
+        lines.append(", ".join(m["factions_found"][:12]))
+
+    ev = scan.get("evasion_hits") or []
+    if ev:
+        lines.append("\n**명명 회피 관용구 검출**")
+        for e in ev:
+            lines.append(f"- \"{e['phrase']}\"")
+            for s in e.get("samples", []):
+                lines.append(f"    · `{s}`")
+
+    lines.append("\n> 검사는 검출만 합니다. 수정 여부와 방식은 작가의 판단입니다.")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════
+# 무공 대전 (Martial Codex) 게이트 — v2.7.0 신규
+#
+# 성장하는 사전은 오염되면 50화가 전부 오염된다. 등록 게이트 7종으로
+# 막는다. 자동 등록은 없다 — 전부 작가 승인 후 병합이다.
+# ═══════════════════════════════════════════════════
+
+# 게이트 1 — 무협 관용명 차단 목록 (작품 고유성 보호)
+_CODEX_BANNED_NAMES = set(_GENERIC_ART_NAMES) | {
+    "구음백골조", "금강불괴", "역근경", "세수경", "소요유", "능공허도",
+    "천산절맥", "만천화우", "낙영신검", "천외비선", "무영각", "철사장",
+    "십단금", "대력금강지", "혼원벽력수", "칠상권", "낙화장",
+}
+
+# 게이트 3 — 등록 필수 필드
+_CODEX_REQUIRED_FIELDS = ("name", "faction", "tier", "principle", "cost")
+
+# 무공명 형식 — 조사·서술어가 붙은 문장은 초식명이 아니다
+_SENTENCE_MARKERS = (
+    "한다.", "했다.", "이다.", "된다.", "있다.", "없다.", "된 ", "하는 ",
+    "에서", "에게", "으로", "를 ", "을 ", "이 ", "가 ", "는 ", "와 ", "과 ",
+)
+
+
+def _codex_name_parts(name: str) -> tuple:
+    """무공명을 (한글, 한자)로 분해."""
+    if not name:
+        return "", ""
+    m = re.match(r"\s*([^()（）]+)[\(（]?([\u4e00-\u9fff]*)[\)）]?\s*$", str(name))
+    if not m:
+        return str(name).strip(), ""
+    return m.group(1).strip(), (m.group(2) or "").strip()
+
+
+def _is_valid_art_name(name: str) -> bool:
+    """초식명 형식 판정 — 문장·설명문 배제."""
+    if not name or not isinstance(name, str):
+        return False
+    kor, _han = _codex_name_parts(name)
+    if not (2 <= len(kor) <= 12):
+        return False
+    if any(mk in name for mk in _SENTENCE_MARKERS):
+        return False
+    if re.search(r"[.,!?·…]", kor):
+        return False
+    # 초식명에는 공백이 없다. "심각한 부상 유발" 같은 서술구를 배제한다.
+    if " " in kor and not re.fullmatch(r"[A-Za-z0-9\s]+", kor):
+        return False
+    return bool(re.fullmatch(r"[가-힣A-Za-z0-9\s]+", kor))
+
+
+def _jamo_similarity(a: str, b: str) -> float:
+    """두 무공명의 유사도 (0.0~1.0). 게이트 2용."""
+    if not a or not b:
+        return 0.0
+    sa, sb = set(a), set(b)
+    if not sa or not sb:
+        return 0.0
+    inter = len(sa & sb)
+    return inter / max(len(sa), len(sb))
+
+
+def sanitize_martial_bible(martial_bible: dict) -> dict:
+    """바이블 정화 — 문장형 오염 항목 격리 (v2.7.0 신규).
+
+    [왜 필요한가]
+    기획서 추출 과정에서 서술 문장이 초식명으로 등재됐다.
+    아미고 실측: "유정이 두 가문의 비법을 총망라한 약을 조제했다.",
+    "장웨이가 소림무술을 지도한다.", "심각한 부상 유발" 등 7~8건.
+    이 항목들이 A28 철자 고정 목록 40칸을 잡아먹고 프롬프트에 실렸다.
+
+    삭제하지 않고 _rejected로 격리한다. 작가가 되돌릴 수 있어야 한다.
+
+    Returns:
+        {"bible": 정화된 바이블, "rejected": [격리 항목], "report": str}
+    """
+    if not isinstance(martial_bible, dict):
+        return {"bible": {}, "rejected": [], "report": "바이블 없음"}
+
+    import copy
+    mb = copy.deepcopy(martial_bible)
+    rejected = []
+
+    # power_taxonomy 정화
+    tax = mb.get("power_taxonomy")
+    if isinstance(tax, list):
+        keep = []
+        for it in tax:
+            nm = (it or {}).get("name", "") if isinstance(it, dict) else ""
+            if _is_valid_art_name(nm):
+                keep.append(it)
+            else:
+                rejected.append({"where": "power_taxonomy", "name": nm, "item": it})
+        mb["power_taxonomy"] = keep
+
+    # faction_arts.arts 정화
+    fa = mb.get("faction_arts")
+    if isinstance(fa, list):
+        for grp in fa:
+            if not isinstance(grp, dict):
+                continue
+            arts = grp.get("arts")
+            if not isinstance(arts, list):
+                continue
+            keep = []
+            for it in arts:
+                nm = (it or {}).get("name", "") if isinstance(it, dict) else ""
+                if _is_valid_art_name(nm):
+                    keep.append(it)
+                else:
+                    rejected.append({
+                        "where": f"faction_arts/{grp.get('faction', '?')}",
+                        "name": nm, "item": it,
+                    })
+            grp["arts"] = keep
+
+    # author_locked_terms 정화
+    locked = mb.get("author_locked_terms")
+    if isinstance(locked, list):
+        keep = []
+        for t in locked:
+            if _is_valid_art_name(str(t)):
+                keep.append(t)
+            else:
+                rejected.append({"where": "author_locked_terms",
+                                 "name": str(t), "item": t})
+        mb["author_locked_terms"] = keep
+
+    mb.setdefault("_rejected", [])
+    mb["_rejected"].extend(rejected)
+
+    lines = [f"### 🧹 바이블 정화 — {len(rejected)}건 격리"]
+    if rejected:
+        lines.append("초식명 형식이 아닌 항목을 `_rejected`로 옮겼습니다. 삭제하지 않았습니다.")
+        lines.append("")
+        for r in rejected[:15]:
+            nm = (r["name"] or "")[:60]
+            lines.append(f"- `{r['where']}` — {nm}")
+    else:
+        lines.append("오염 항목이 없습니다.")
+
+    return {"bible": mb, "rejected": rejected, "report": "\n".join(lines)}
+
+
+def _collect_codex_names(martial_bible: dict) -> dict:
+    """현재 바이블의 무공명 색인 — {한글: 전체표기}."""
+    idx = {}
+    if not isinstance(martial_bible, dict):
+        return idx
+    for it in martial_bible.get("power_taxonomy") or []:
+        if isinstance(it, dict) and it.get("name"):
+            kor, _ = _codex_name_parts(it["name"])
+            if kor:
+                idx[kor] = it["name"]
+    for grp in martial_bible.get("faction_arts") or []:
+        if not isinstance(grp, dict):
+            continue
+        for it in grp.get("arts") or []:
+            if isinstance(it, dict) and it.get("name"):
+                kor, _ = _codex_name_parts(it["name"])
+                if kor:
+                    idx[kor] = it["name"]
+    return idx
+
+
+def validate_codex_entry(entry: dict, martial_bible: dict = None,
+                         tier_counts: dict = None) -> dict:
+    """무공 대전 항목 등록 게이트 7종 (v2.7.0 신규).
+
+    Returns:
+        {"ok": bool, "level": "PASS"|"WARN"|"BLOCK",
+         "reasons": [str], "entry": 정규화된 항목}
+    """
+    reasons = []
+    level = "PASS"
+    if not isinstance(entry, dict):
+        return {"ok": False, "level": "BLOCK", "reasons": ["항목 형식 오류"], "entry": {}}
+
+    name = str(entry.get("name") or "").strip()
+    kor, han = _codex_name_parts(name)
+    idx = _collect_codex_names(martial_bible or {})
+
+    # 게이트 1 — 무협 관용명 차단
+    if kor in _CODEX_BANNED_NAMES:
+        reasons.append(f"게이트1 관용명 — '{kor}'는 기존 무협 작품의 무공명입니다. 작품 고유성이 훼손됩니다.")
+        level = "BLOCK"
+
+    # 게이트 2 — 중복·유사 이름
+    if kor and kor in idx:
+        reasons.append(f"게이트2 중복 — '{kor}'는 이미 등재돼 있습니다 ({idx[kor]}).")
+        level = "BLOCK"
+    else:
+        for ex_kor, ex_full in idx.items():
+            if not ex_kor or ex_kor == kor:
+                continue
+            if kor and (kor in ex_kor or ex_kor in kor):
+                reasons.append(f"게이트2 포함관계 — 기존 '{ex_full}'와 이름이 겹칩니다.")
+                level = "BLOCK" if level != "BLOCK" else level
+                break
+            if _jamo_similarity(kor, ex_kor) >= 0.85:
+                reasons.append(f"게이트2 유사 — 기존 '{ex_full}'와 매우 비슷합니다. 혼동 위험.")
+                level = "WARN" if level == "PASS" else level
+                break
+
+    # 게이트 3 — 필수 필드
+    missing = [f for f in _CODEX_REQUIRED_FIELDS
+               if not str(entry.get(f) or "").strip()]
+    if missing:
+        label = {"name": "무공명", "faction": "문파", "tier": "등급",
+                 "principle": "원리", "cost": "대가"}
+        reasons.append(
+            "게이트3 필수 필드 누락 — "
+            + ", ".join(label.get(m, m) for m in missing)
+            + ". 원리·대가가 없으면 A30 3박자 해설을 쓸 수 없습니다."
+        )
+        level = "BLOCK"
+
+    # 게이트 4 — 한자 철자 충돌
+    if kor and han:
+        for ex_kor, ex_full in idx.items():
+            if ex_kor != kor:
+                continue
+            _, ex_han = _codex_name_parts(ex_full)
+            if ex_han and ex_han != han:
+                reasons.append(
+                    f"게이트4 한자 충돌 — 같은 '{kor}'인데 한자가 다릅니다: "
+                    f"기존 {ex_han} / 신규 {han}"
+                )
+                level = "BLOCK"
+
+    # 게이트 5 — 등급 정원
+    tier = str(entry.get("tier") or "").strip()
+    faction = str(entry.get("faction") or "").strip()
+    if tier and tier_counts is not None:
+        try:
+            from prompt import MARTIAL_CODEX_TIERS
+            quota = MARTIAL_CODEX_TIERS.get(tier, {}).get("quota_per_faction")
+        except Exception:
+            quota = None
+        if quota:
+            used = (tier_counts.get(faction, {}) or {}).get(tier, 0)
+            if used >= quota:
+                reasons.append(
+                    f"게이트5 정원 초과 — {faction} {tier} 등급이 이미 {used}종입니다 "
+                    f"(정원 {quota}). 무공의 무게는 희소성에서 나옵니다."
+                )
+                level = "WARN" if level == "PASS" else level
+
+    # 게이트 6 — 이름 형식
+    if not _is_valid_art_name(name):
+        reasons.append(f"게이트6 이름 형식 — '{name[:40]}'는 초식명 형식이 아닙니다.")
+        level = "BLOCK"
+
+    # 게이트 7 — 출처 태그 (자동 부여)
+    norm = dict(entry)
+    norm.setdefault("source", "expansion")
+    norm.setdefault("origin_ep", 0)
+    norm["name"] = name
+
+    return {"ok": level != "BLOCK", "level": level,
+            "reasons": reasons, "entry": norm}
+
+
+def merge_martial_codex(martial_bible: dict, new_entries: list,
+                        faction: str = "", snapshot: bool = True) -> dict:
+    """검증 통과 항목을 바이블에 병합 (v2.7.0 신규).
+
+    병합 직전 바이블 스냅샷을 _snapshots에 보존한다 (보안책 6 — 롤백).
+    자동 호출 금지. 작가가 승인한 항목만 넘긴다 (코드 작업 규칙 7).
+    """
+    import copy
+    from datetime import datetime
+
+    if not isinstance(martial_bible, dict):
+        martial_bible = {}
+    mb = copy.deepcopy(martial_bible)
+
+    if snapshot:
+        snaps = mb.get("_snapshots") or []
+        lean = {k: v for k, v in martial_bible.items() if not k.startswith("_")}
+        snaps.append({
+            "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "note": f"{faction} 확장 병합 전",
+            "bible": lean,
+        })
+        mb["_snapshots"] = snaps[-5:]   # 최근 5개만 보존
+
+    # 등급 정원 현황 집계
+    tier_counts = {}
+    for grp in mb.get("faction_arts") or []:
+        if not isinstance(grp, dict):
+            continue
+        fac = str(grp.get("faction") or "").strip()
+        tier_counts.setdefault(fac, {})
+        for a in grp.get("arts") or []:
+            if isinstance(a, dict):
+                t = str(a.get("tier") or "").strip()
+                if t:
+                    tier_counts[fac][t] = tier_counts[fac].get(t, 0) + 1
+
+    accepted, blocked, warned = [], [], []
+    for e in new_entries or []:
+        v = validate_codex_entry(e, mb, tier_counts)
+        if not v["ok"]:
+            blocked.append({"entry": e, "reasons": v["reasons"]})
+            continue
+        if v["level"] == "WARN":
+            warned.append({"entry": v["entry"], "reasons": v["reasons"]})
+        accepted.append(v["entry"])
+
+        # 즉시 색인 반영 — 같은 배치 내 중복도 잡는다
+        fac = str(v["entry"].get("faction") or faction).strip()
+        tier = str(v["entry"].get("tier") or "").strip()
+        tier_counts.setdefault(fac, {})
+        if tier:
+            tier_counts[fac][tier] = tier_counts[fac].get(tier, 0) + 1
+        grp = None
+        for g in mb.setdefault("faction_arts", []):
+            if isinstance(g, dict) and str(g.get("faction", "")).strip() == fac:
+                grp = g
+                break
+        if grp is None:
+            grp = {"faction": fac, "signature": "", "training": "", "arts": []}
+            mb["faction_arts"].append(grp)
+        grp.setdefault("arts", []).append(v["entry"])
+
+        # A28 철자 고정 목록에 등록
+        locked = mb.setdefault("author_locked_terms", [])
+        if v["entry"]["name"] not in locked:
+            locked.append(v["entry"]["name"])
+
+    return {
+        "bible": mb, "accepted": accepted,
+        "blocked": blocked, "warned": warned,
+        "tier_counts": tier_counts,
+    }
+
+
+def format_codex_merge_report(result: dict, faction: str = "") -> str:
+    """병합 결과를 작가용 마크다운 리포트로 변환."""
+    if not result:
+        return ""
+    acc = result.get("accepted") or []
+    blk = result.get("blocked") or []
+    wrn = result.get("warned") or []
+
+    lines = [f"### ⚔️ 무공 대전 병합 결과" + (f" — {faction}" if faction else "")]
+    lines.append(f"등록 **{len(acc)}종** · 경고 {len(wrn)}종 · 차단 {len(blk)}종")
+
+    if acc:
+        lines.append("\n**등록된 무공**")
+        lines.append("| 무공명 | 영문 | 등급 | 분류 | 대가 |")
+        lines.append("|---|---|---|---|---|")
+        for e in acc[:30]:
+            lines.append(
+                f"| {e.get('name','')} | {e.get('name_en','')} | "
+                f"{e.get('tier','')} | {e.get('category','')} | "
+                f"{str(e.get('cost',''))[:40]} |"
+            )
+    if wrn:
+        lines.append("\n**경고 (등록됨 — 확인 권장)**")
+        for w in wrn[:10]:
+            lines.append(f"- {w['entry'].get('name','')}")
+            for r in w["reasons"]:
+                lines.append(f"    · {r}")
+    if blk:
+        lines.append("\n**차단 (등록 안 됨)**")
+        for b in blk[:15]:
+            nm = (b["entry"] or {}).get("name", "?")
+            lines.append(f"- {nm}")
+            for r in b["reasons"]:
+                lines.append(f"    · {r}")
+
+    lines.append("\n> 병합 직전 바이블은 `_snapshots`에 보존됐습니다. 되돌릴 수 있습니다.")
+    return "\n".join(lines)
+
+
 def _self_test():
     """모듈 자체 검증."""
     print("=== engine_validator.py 자가 테스트 ===")
@@ -1643,6 +2532,40 @@ def _self_test():
     # 4. 마크다운 리포트
     report = generate_material_usage_report(result, ep_number=1)
     print(f"\n리포트 길이: {len(report)}자")
+
+    # 5. 장르 밀도 스캐너 (v2.6.0) — 방향성 회귀 검증
+    #    장르 신호가 있는 원고가 없는 원고보다 반드시 높아야 한다.
+    dense = (
+        "\"무당파의 당랑연검술(螳螂軟劍術)!\"\n"
+        "장무극의 검이 사마귀 앞발처럼 파고들었다. '챙' 하고 쇳소리가 울렸다.\n"
+        "당랑연검술은 사마귀의 움직임을 연구해 만든 연검술이다. 정면으로 맞서지 않고 "
+        "상대의 힘을 흘려보낸 뒤 되돌려주는 것이 핵심이었다. 다만 단단한 방어를 뚫는 데는 약하다.\n"
+        "화산파의 화산장풍도(花山掌風道)가 뒤이어 터졌다. 단전에서 끌어올린 내공이 "
+        "손끝에 실렸다. 절정의 경지였다. '붕' 하는 소리와 함께 기운이 뻗었다.\n"
+        "축지법(縮地法). 땅을 접는 보법이다. 소림의 제자가 눈을 크게 떴다.\n"
+        "청수유수권(淸水流手拳)은 방어에 특화된 권법이었다. 아미파가 자랑하는 절기다.\n"
+        "운기조식(運氣調息)으로 기맥을 다스렸다. 살기가 가셨다.\n"
+    )
+    thin = (
+        "그는 팔꿈치로 명치를 눌렀다. 상대의 무릎이 꺾였다.\n"
+        "초식이라 부를 것도 없었다. 그냥, 잡았다.\n"
+        "\"어어, 힘 좀 빼요.\"\n"
+        "\"…\"\n"
+        "\"손목 이러면 밥 어떻게 먹어요.\"\n"
+        "그는 이름이 없었다. 배운 적도 없었다. 그냥 됐다.\n"
+    )
+    d_dense = scan_wuxia_density(dense, ep_number=1)
+    d_thin = scan_wuxia_density(thin, ep_number=1)
+    m_dense = _score_mise_en_scene(dense)["score"]
+    m_thin = _score_mise_en_scene(thin)["score"]
+    print(f"\n장르 밀도 — 무협형: {d_dense['grade']} "
+          f"{d_dense['achieved']}/7 (MISE {m_dense})")
+    print(f"장르 밀도 — 격투형: {d_thin['grade']} "
+          f"{d_thin['achieved']}/7 (MISE {m_thin})")
+    assert d_dense["achieved"] > d_thin["achieved"], "밀도 판정 방향 역전"
+    assert m_dense > m_thin, "MISE 점수 방향 역전 (사고 패턴 N 재발)"
+    assert d_thin["evasion_hits"], "명명 회피 관용구 미검출"
+    print("장르 밀도 방향성 검증 통과 (사고 패턴 N 회귀 방지)")
 
     print("\n✅ 자가 테스트 통과")
 

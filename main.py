@@ -1,24 +1,53 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.6.1 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.7.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
-v2.6.1 (2026-07-26) — 페이지 여백 조정
-  · docx_builder.py v2.2.1 연동 — A4 여백 2.5cm → 2.0cm (상·하·좌·우)
-    회차·시즌·기획서 DOCX 공통
+v2.7.0 (2026-07-26) — Martial Codex (성장하는 무공 대전)
+  · [사고 원인] martial_bible이 기획서 1회 추출로 끝나고 쓰기 경로가
+    없었다. 실측: 작가 원고 EP1에서 8종, EP2에서 4종이 바이블 밖에서
+    태어났다. 50화면 200~300종 규모 — 41개 고정 목록으로는 불가능.
+  · [정정] 앞서 "바이블에 서술 문장이 오염 등재됐다"고 진단했으나
+    실제로는 데이터가 아니라 읽는 쪽의 문제였다.
+    _collect_bible_terms가 faction_arts의 signature·training
+    서술 필드를 초식명 버킷에 넣고 있었다. 수집기를 수정했다.
+  · STEP 2에 ⚔️ 무공 대전 탭 신설
+    — 문파별 확장 생성 (12종 배치. 60종 일괄은 토큰 초과로 잘린다)
+    — 검수 대기 → 작가 승인 → 병합. 자동 등록 없음
+    — 등록 게이트 7종: 관용명 차단 / 중복·유사 / 필수 4필드 /
+      한자 철자 충돌 / 등급 정원 / 이름 형식 / 출처 태그
+    — 바이블 정화 (서술문 격리, 삭제 아닌 _rejected 이동)
+    — 병합 직전 스냅샷 자동 보존 (_snapshots, 최근 5개)
+  · 📕 무공 대전 DOCX 별첨 문서 출력
+    표지 / 개관 / 경지 서열 / 등급 정의 / 문파별 장 / 무공 상세 /
+    기보 / 무기 / 금기 / 용어 색인(한글·한자·영문)
+    원고 완료 후 작품 제안서에 그대로 첨부하는 완성 설정집
+  · 프로듀서 노트 예시 문구 수정 — "한자 병기 최소화"가 A29와
+    정반대 방향으로 유도하고 있었다
 
-v2.6.0 (2026-07-26) — Manuscript Layout Pack (원고 서식)
-  · docx_builder.py v2.2.0 연동 — 함초롬바탕 스타일 체계
-    — 문서 기본값 + Normal + '에피소드 제목' + '웹소설본문' 4단 스타일
-    — 본문 run에 폰트를 박지 않으므로 워드에서 스타일 하나만 고치면
-      원고 전체 서식이 한 번에 바뀜 (작가 교정 파일 방식)
-  · 곧은 따옴표(" ') → 둥근 따옴표(“ ” ‘ ’) 자동 변환
-    — 곧은 따옴표는 AI 생성 신호로 읽히므로 출력 단계에서 정규화
-  · 머리말 〈작품 제목〉 + 꼬리말 페이지 번호 신설
-  · [수정] 회차 DOCX 제목 오인식 — 본문 첫 문장이 제목으로 승격되고
-    본문에서 사라지던 문제 (아미고 EP001 사례). 제목 판별 규칙 신설
-  · DOCX 다운로드 시 회차 플롯의 title을 제목으로 사용
+v2.6.0 (2026-07-26) — Genre Density Pack (장르 밀도 회복)
+  · [사고 패턴 N] 아미고 EP1·EP2 엔진 원고와 작가 원고 정량 대조:
+      작가 EP2 — 무공 명명 9종 / 한자 병기 16회 / 내공 어휘 10회
+      엔진 EP2 — 무공 명명 0종 / 한자 병기 0회 / 내공 어휘 0회
+    그런데 기존 5축 검수는 엔진 원고에 MISE_EN_SCENE 90점,
+    작가 원고에 80점 + "글로벌 친화 위반" 감점을 줬다.
+    검수기가 장르가 죽은 원고를 더 높게 평가하고 있었다.
+  · STEP 3에 🥋 무협 장르 밀도 검사 신설 (API 미사용, 재현성 100%)
+    — A29 7개 쿼터 실측표 (무공 명명/병기/3박자/문파/내공/
+      의성어/경지). EP1~EP4는 강화 임계값 적용
+    — 명명 회피 관용구("이름이 없었다"·"그냥 됐다") 문장 단위 검출
+    — PASS가 아니면 자동 펼침. 다른 검사보다 앞에 배치
+  · REDO 재집필 프롬프트에 장르 밀도 리포트 **최우선** 주입
+  · prompt.py 연동 — A29 무협 밀도 하한 / A30 무공 3박자 문법
+    (명명→시연→해설) / A31 강호 좌표 룰 신설.
+    EP1~EP4에 WUXIA_OPENING_DENSITY_SPEC 자동 주입
+  · engine_validator.py 연동 — 한자 병기 감점 방향 반전,
+    이름 붙은 무공 종수·3박자 해설을 MISE_EN_SCENE 배점에 반영
+  · 회귀 검증 (아미고 4개 원고):
+      작가 EP1/EP2  MISE 80 → 100  · 밀도 PASS 6/7
+      엔진 EP1      MISE 87 →  86  · 밀도 WARN 4/7
+      엔진 EP2      MISE 90 →  33  · 밀도 FAIL 1/7
 
 v2.5.0 (2026-07-25) — Martial Consistency Scanner
   · STEP 3에 ⚔️ 초식 일관성 검사 신설 (API 미사용, 재현성 100%)
@@ -171,6 +200,8 @@ from prompt import (
     build_parse_brief_prompt,
     build_martial_bible_prompt,           # v2.4.0 신규
     build_storyline_extract_prompt,       # v2.4.0 신규
+    build_martial_codex_expansion_prompt, # v2.7.0 신규
+    MARTIAL_CODEX_TIERS,                  # v2.7.0 신규
     extract_brief_sections,               # v2.4.0 신규
     compress_brief_for_prompt,            # v2.4.0 신규
     build_brief_to_seed_prompt,           # v2.0 신규
@@ -230,7 +261,10 @@ from profession_pack import (
     auto_inject_profession_blocks,
 )
 from parser import parse_brief
-from docx_builder import build_episode_docx, build_season_docx, build_proposal_docx
+from docx_builder import (
+    build_episode_docx, build_season_docx, build_proposal_docx,
+    build_martial_codex_docx,           # v2.7.0 신규
+)
 # v2.0 자가 검수 엔진
 from engine_validator import (
     VALIDATION_MODES,
@@ -243,6 +277,11 @@ from engine_validator import (
     format_prose_scan_report,       # v2.2.0 신규
     scan_martial_consistency,       # v2.5.0 신규
     format_martial_scan_report,     # v2.5.0 신규
+    scan_wuxia_density,             # v2.6.0 신규
+    format_wuxia_density_report,    # v2.6.0 신규
+    sanitize_martial_bible,         # v2.7.0 신규
+    merge_martial_codex,            # v2.7.0 신규
+    format_codex_merge_report,      # v2.7.0 신규
     diagnose_youth_target,          # v2.3.0 신규
     format_youth_diagnosis_report,  # v2.3.0 신규
 )
@@ -661,6 +700,10 @@ defaults = {
     # v2.4.0 기획서 재료 그릇
     "martial_bible": {},           # 초식 바이블 (무공·초식·기보·무기)
     "storyline_acts": {},          # 기획서 막 구조 스토리라인
+    # v2.7.0 무공 대전
+    "codex_pending": None,         # 확장 생성 후 검수 대기 항목
+    "codex_pending_faction": "",   # 검수 대기 문파명
+    "codex_last_report": "",       # 마지막 병합 리포트
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -675,7 +718,7 @@ with st.expander("🎬 프로듀서 노트 (전역 적용)", expanded=False):
         "세션 전체에 적용할 지시사항",
         value=st.session_state.producer_note,
         height=80,
-        placeholder="예: 대사 짧고 건조하게. 전투는 초단문. 한자 병기 최소화.",
+        placeholder="예: 대사 짧고 건조하게. 초식 명명은 대사로 외치게. 문파 귀속 자주 노출.",
         label_visibility="collapsed",
     )
 
@@ -1333,11 +1376,12 @@ with tab2:
     if not st.session_state.concept_card:
         st.warning("먼저 STEP 1에서 컨셉 카드를 생성해주세요.")
     else:
-        build_tab1, build_tab2, build_tab3, build_tab4 = st.tabs([
+        build_tab1, build_tab2, build_tab3, build_tab4, build_tab5 = st.tabs([
             "Core Arc (50화)",
             "Extension Arc",
             "Plant & Payoff Map",
             "Character Bible",
+            "⚔️ 무공 대전",
         ])
 
         # ──── Core Arc ────
@@ -1560,6 +1604,175 @@ with tab2:
                         with st.expander(f"{role_key}: {role_data.get('이름', role_data.get('name', ''))}", expanded=False):
                             st.json(role_data)
 
+        # ──── 무공 대전 (v2.7.0 신규) ────
+        with build_tab5:
+            st.markdown('<div class="sub-tab-header">⚔️ 무공 대전 · Martial Codex</div>',
+                        unsafe_allow_html=True)
+            st.caption(
+                "기획서 1회 추출로 확정된 바이블은 50화를 버티지 못합니다. "
+                "문파별로 무공 체계를 확장해 집필 재료를 확보하고, "
+                "완성된 대전은 작품 제안서 별첨 문서로 출력합니다."
+            )
+
+            _mb = st.session_state.martial_bible or {}
+            if not _mb:
+                st.warning(
+                    "초식 바이블이 없습니다. STEP 1에서 기획서 업로드 후 "
+                    "초식 바이블 추출을 먼저 실행해 주십시오."
+                )
+            else:
+                # ── 현황 ──
+                _fa = [g for g in (_mb.get("faction_arts") or []) if isinstance(g, dict)]
+                _all = [a for g in _fa for a in (g.get("arts") or [])
+                        if isinstance(a, dict) and a.get("name")]
+                _tier_stat = {}
+                for _a in _all:
+                    _t = str(_a.get("tier") or "미분류").strip()
+                    _tier_stat[_t] = _tier_stat.get(_t, 0) + 1
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("수록 무공", f"{len(_all)}종")
+                c2.metric("수록 문파", f"{len(_fa)}문파")
+                c3.metric("목표", "50~70종")
+                if _tier_stat:
+                    st.caption("등급 분포 · " + " / ".join(
+                        f"{k} {v}종" for k, v in _tier_stat.items()))
+
+                st.markdown("---")
+
+                # ── 바이블 정화 ──
+                with st.expander("🧹 바이블 정화 (서술문 격리)", expanded=False):
+                    st.caption(
+                        "기획서 추출 과정에서 서술 문장이 초식명으로 등재되는 경우가 "
+                        "있습니다. 삭제하지 않고 `_rejected`로 격리합니다."
+                    )
+                    if st.button("정화 실행", use_container_width=True):
+                        _res = sanitize_martial_bible(_mb)
+                        st.session_state.martial_bible = _res["bible"]
+                        st.markdown(_res["report"])
+                        if _res["rejected"]:
+                            st.rerun()
+
+                # ── 문파별 확장 ──
+                st.markdown("#### 문파별 확장")
+                _fac_names = [str(g.get("faction") or "").strip()
+                              for g in _fa if str(g.get("faction") or "").strip()]
+                _fac_input = st.text_input(
+                    "확장할 문파 (바이블에 없는 문파를 새로 만들 수도 있습니다)",
+                    value=_fac_names[0] if _fac_names else "",
+                    placeholder="예: 무당파",
+                )
+                _cnt = st.slider("생성 종수", 6, 16, 12, 1,
+                                 help="한 번에 12종이 토큰 안정권입니다. "
+                                      "60종을 한 번에 만들면 응답이 잘립니다.")
+
+                _quota_txt = " / ".join(
+                    f"{k} {v['quota_per_faction']}" for k, v in MARTIAL_CODEX_TIERS.items())
+                st.caption(f"등급 정원 (문파당) · {_quota_txt}")
+
+                if st.button("⚔️ 무공 확장 생성", use_container_width=True,
+                             disabled=not _fac_input.strip()):
+                    with st.spinner(f"{_fac_input} 무공 체계 설계 중..."):
+                        _existing = []
+                        for _g in _fa:
+                            for _a in (_g.get("arts") or []):
+                                if isinstance(_a, dict) and _a.get("name"):
+                                    _existing.append(_a["name"])
+                        _existing += [str(t) for t in (_mb.get("author_locked_terms") or [])]
+
+                        _raw = call_claude(
+                            build_martial_codex_expansion_prompt(
+                                _mb,
+                                st.session_state.concept_card,
+                                _fac_input.strip(),
+                                target_count=_cnt,
+                                existing_names=_existing,
+                                storyline_acts=st.session_state.storyline_acts,
+                            ),
+                            max_tokens=MAX_TOKENS_STRUCTURE,
+                        )
+                        _parsed = safe_json(_raw)
+                        if _parsed and _parsed.get("arts"):
+                            st.session_state.codex_pending = _parsed
+                            st.session_state.codex_pending_faction = _fac_input.strip()
+                            st.success(f"{len(_parsed['arts'])}종 생성 — 아래에서 검수 후 병합하십시오.")
+                        else:
+                            st.error("생성 실패. 응답을 확인해 주십시오.")
+                            with st.expander("원본 응답"):
+                                st.code(_raw[:3000])
+
+                # ── 검수 및 병합 ──
+                _pending = st.session_state.get("codex_pending")
+                if _pending and _pending.get("arts"):
+                    _pf = st.session_state.get("codex_pending_faction", "")
+                    st.markdown("---")
+                    st.markdown(f"#### 검수 대기 — {_pf} {len(_pending['arts'])}종")
+                    if _pending.get("faction_philosophy"):
+                        st.info("문파 철학 · " + str(_pending["faction_philosophy"]))
+
+                    for _i, _e in enumerate(_pending["arts"]):
+                        _nm = _e.get("name", "?")
+                        _tr = _e.get("tier", "")
+                        with st.expander(f"{_nm}  [{_tr}]  {_e.get('name_en','')}",
+                                         expanded=False):
+                            st.json(_e)
+
+                    st.caption(
+                        "병합 시 등록 게이트 7종(관용명·중복·필수필드·한자충돌·정원·"
+                        "이름형식·출처태그)이 적용됩니다. 병합 직전 바이블은 자동 보존됩니다."
+                    )
+                    cm1, cm2 = st.columns(2)
+                    with cm1:
+                        if st.button("✅ 바이블에 병합", use_container_width=True):
+                            _r = merge_martial_codex(
+                                st.session_state.martial_bible,
+                                _pending["arts"], _pf)
+                            # 문파 철학 보존
+                            if _pending.get("faction_philosophy"):
+                                for _g in _r["bible"].get("faction_arts") or []:
+                                    if str(_g.get("faction", "")).strip() == _pf:
+                                        _g["faction_philosophy"] = _pending["faction_philosophy"]
+                            st.session_state.martial_bible = _r["bible"]
+                            st.session_state.codex_last_report = \
+                                format_codex_merge_report(_r, _pf)
+                            st.session_state.codex_pending = None
+                            st.rerun()
+                    with cm2:
+                        if st.button("✖️ 폐기", use_container_width=True):
+                            st.session_state.codex_pending = None
+                            st.rerun()
+
+                if st.session_state.get("codex_last_report"):
+                    st.markdown("---")
+                    st.markdown(st.session_state.codex_last_report)
+
+                # ── 별첨 문서 출력 ──
+                st.markdown("---")
+                st.markdown("#### 별첨 문서 출력")
+                st.caption(
+                    "작품 제안서에 첨부하는 완성 설정집입니다. "
+                    "표지 · 무공 체계 개관 · 경지 서열 · 문파별 장 · "
+                    "기보 · 무기 · 금기 · 용어 색인(한글·한자·영문) 구성입니다."
+                )
+                _wt = (st.session_state.concept_card or {}).get("title", "작품")
+                try:
+                    _docx = build_martial_codex_docx(
+                        st.session_state.martial_bible,
+                        st.session_state.concept_card,
+                    )
+                    st.download_button(
+                        "📕 무공 대전 DOCX 다운로드",
+                        data=_docx,
+                        file_name=f"{_wt}_무공대전_{datetime.now().strftime('%Y%m%d')}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
+                except Exception as _ex:
+                    st.error(f"문서 생성 실패: {_ex}")
+
+                with st.expander("현재 무공 대전 JSON", expanded=False):
+                    st.json(st.session_state.martial_bible)
+
 
 # ══════════════════════════════════════════════
 # STEP 3: WRITING (회차 집필)
@@ -1741,20 +1954,12 @@ with tab3:
                     try:
                         # rating 파라미터: "19" / "15" 형식 (docx_builder 규약)
                         rating_code = "19" if rating == "19금" else "15"
-                        # v2.6.0: 회차 플롯에 제목이 있으면 원고 제목으로 사용
-                        # (없으면 docx_builder가 본문 첫 줄을 판정하거나
-                        #  'EP 01.' 형태를 자동 생성)
-                        _plot = st.session_state.episode_plots.get(selected_ep)
-                        plot_title = (
-                            _plot.get("title", "") if isinstance(_plot, dict) else ""
-                        ) or None
                         docx_bytes = build_episode_docx(
                             current_ep,
                             selected_ep,
                             concept=st.session_state.concept_card,
                             rating=rating_code,
                             platform=platform,
-                            title_override=plot_title,
                         )
                         title = st.session_state.concept_card.get("title", "wuxia")
                         safe_title = re.sub(r"[^\w\-]", "_", title)
@@ -1909,6 +2114,30 @@ with tab3:
                 with st.expander(scan_label, expanded=False):
                     st.markdown(format_prose_scan_report(prose_scan, ep_number=selected_ep))
 
+                # ──── 무협 장르 밀도 검사 (v2.6.0 — 정적 검출, API 미사용) ────
+                # 도입 4화에서 장르 신호가 부족하면 문장이 좋아도 독자가
+                # 남지 않는다. 다른 어떤 검사보다 먼저 보여야 하는 지표다.
+                density_scan = scan_wuxia_density(
+                    current_ep,
+                    ep_number=selected_ep,
+                    martial_bible=st.session_state.martial_bible,
+                )
+                _d_grade = density_scan.get("grade", "?")
+                _d_icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "🚨"}.get(_d_grade, "•")
+                d_label = (
+                    f"🥋 무협 장르 밀도 — {_d_icon} {_d_grade} "
+                    f"(쿼터 {density_scan.get('achieved', 0)}/{density_scan.get('total', 7)})"
+                )
+                with st.expander(d_label, expanded=(_d_grade != "PASS")):
+                    if density_scan.get("is_opening"):
+                        st.caption(
+                            "EP1~EP4는 독자가 장르를 판정하는 구간입니다. "
+                            "강화 임계값(A29)을 적용합니다."
+                        )
+                    st.markdown(
+                        format_wuxia_density_report(density_scan, ep_number=selected_ep)
+                    )
+
                 # ──── 초식 일관성 검사 (v2.5.0 — 정적 검출, API 미사용) ────
                 martial_scan = scan_martial_consistency(
                     current_ep,
@@ -2005,8 +2234,21 @@ with tab3:
                             with st.spinner("약점 보완 재집필 중... (Opus 사용)"):
                                 # v2.2.0: 문체 스캐너 검출 결과를 REDO 프롬프트에 주입
                                 # v2.3.0: 1020 타깃·장르 진단 결과도 함께 주입
+                                # v2.6.0: 장르 밀도 검출 결과를 최우선으로 주입
+                                #   — 도입 4화의 장르 소실이 REDO의 1순위 교정 대상
+                                redo_density = scan_wuxia_density(
+                                    current_ep,
+                                    ep_number=selected_ep,
+                                    martial_bible=st.session_state.martial_bible,
+                                )
                                 redo_scan = scan_prose_style(current_ep, st.session_state.character_bible)
                                 redo_parts = []
+                                if redo_density.get("grade") != "PASS":
+                                    redo_parts.append(
+                                        format_wuxia_density_report(
+                                            redo_density, ep_number=selected_ep
+                                        )
+                                    )
                                 if not redo_scan["clean"]:
                                     redo_parts.append(
                                         format_prose_scan_report(redo_scan, ep_number=selected_ep)
