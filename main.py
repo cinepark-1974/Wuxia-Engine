@@ -1,9 +1,27 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.7.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.7.1 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.7.1 (2026-07-27) — STEP 3 작업 순서 직관화 (UI 전용)
+  · [사고 원인] STEP 3의 실행 버튼이 세 군데로 흩어져 있고, 화면 순서가
+    실제 작업 흐름과 어긋났다. 특히 회차 요약·DOCX 다운로드가 검수보다
+    위에 있어 검수 전 원고를 확정본처럼 다루도록 유도했다. 회차 요약은
+    다음 회차 플롯의 입력 재료이므로, 재집필 전 원고로 요약을 뜨면 그
+    내용이 다음 회차에 그대로 흘러간다. 배치 문제가 데이터 흐름 문제로
+    번지는 구조였다.
+  · 모든 실행 버튼에 작업 순서 번호 부여
+    ① 플롯 생성 → ② 본문 집필 → ③ 규칙 기반 검수 → ④ LLM 깊이 검수
+    → ⑤ 약점 보완 재집필(REDO 시) → ⑥ 회차 요약 → ⑦ DOCX 다운로드
+  · 회차 선택 직후 진행 순서 안내 + 완료 체크(✅/⬜) 표시
+  · 다음에 눌러야 할 버튼을 primary 색으로 자동 강조
+  · ⑥ 회차 요약 · ⑦ DOCX 다운로드를 검수 결과 아래로 이동
+  · 15금 변환 · 품질 체크(구버전) · 독자 시뮬레이터를
+    🧰 보조 도구 (선택 · 순서 무관) 로 분리 — 번호 체계에서 제외
+  · STEP 1 서브탭에 "4가지 중 하나만 선택" 안내 추가
+  · STEP 2 서브탭에 필수(①②③) / 선택 표기 추가
+  · 프롬프트 · 룰 · 검수 로직 변경 없음. 화면 배치와 라벨만 변경
 v2.7.0 (2026-07-26) — Martial Codex (성장하는 무공 대전)
   · [사고 원인] martial_bible이 기획서 1회 추출로 끝나고 쓰기 경로가
     없었다. 실측: 작가 원고 EP1에서 8종, EP2에서 4종이 바이블 밖에서
@@ -901,6 +919,11 @@ tab1, tab2, tab3 = st.tabs([
 with tab1:
     st.markdown('<div class="section-header"><span>CONCEPT · 작품 컨셉 설계</span></div>', unsafe_allow_html=True)
 
+    st.caption(
+        "아래 4가지 방식 중 **하나만** 골라 컨셉 카드를 만듭니다. "
+        "기획서 파일이 있으면 첫 번째 탭을 권합니다."
+    )
+
     sub_tabs_1 = st.tabs([
         "📄 기획서 업로드",
         "💡 아이디어 생성",
@@ -1376,12 +1399,17 @@ with tab2:
     if not st.session_state.concept_card:
         st.warning("먼저 STEP 1에서 컨셉 카드를 생성해주세요.")
     else:
+        st.caption(
+            "①②③을 순서대로 생성하면 STEP 3 집필로 넘어갈 수 있습니다. "
+            "Extension Arc와 무공 대전은 선택 사항입니다."
+        )
+
         build_tab1, build_tab2, build_tab3, build_tab4, build_tab5 = st.tabs([
-            "Core Arc (50화)",
-            "Extension Arc",
-            "Plant & Payoff Map",
-            "Character Bible",
-            "⚔️ 무공 대전",
+            "① Core Arc (50화 · 필수)",
+            "Extension Arc (선택)",
+            "② Plant & Payoff Map",
+            "③ Character Bible",
+            "⚔️ 무공 대전 (선택)",
         ])
 
         # ──── Core Arc ────
@@ -1783,6 +1811,11 @@ with tab3:
     if not st.session_state.core_arc:
         st.warning("먼저 STEP 2에서 Core Arc를 생성해주세요.")
     else:
+        st.caption(
+            "회차 · 플랫폼 · 등급을 먼저 고른 뒤, "
+            "아래 ① 버튼부터 순서대로 진행합니다."
+        )
+
         arc_source = st.radio(
             "집필 대상 Arc",
             ["Core Arc", "Extension Arc"],
@@ -1821,10 +1854,37 @@ with tab3:
                 index=1 if st.session_state.concept_card.get("target_rating") == "19금" else 0,
             )
 
+            # ──── 진행 순서 안내 (v2.7.1 — 첫 사용자 기준 직관화) ────
+            # 버튼이 화면 여러 곳에 흩어져 있어 처음 쓰는 사람이 다음에
+            # 무엇을 눌러야 할지 알 수 없었다. 번호 + 완료 체크로 고정한다.
+            _p_plot = selected_ep in st.session_state.episode_plots
+            _p_text = bool(
+                st.session_state.episodes_19.get(selected_ep)
+                or st.session_state.episodes_15.get(selected_ep)
+            )
+            _p_val = selected_ep in st.session_state.validation_results
+            _p_summ = bool(st.session_state.episode_summaries.get(selected_ep))
+
+            def _mark(done):
+                return "✅" if done else "⬜"
+
+            st.info(
+                f"**EP{selected_ep} 진행 순서** — 번호대로 누르면 한 회차가 완성됩니다.\n\n"
+                f"{_mark(_p_plot)} ① 플롯 생성  →  "
+                f"{_mark(_p_text)} ② 본문 집필  →  "
+                f"{_mark(_p_val)} ③ 규칙 검수 · ④ LLM 검수  →  "
+                f"⑤ 재집필 (검수가 REDO일 때만 나타납니다)  →  "
+                f"{_mark(_p_summ)} ⑥ 회차 요약  →  ⑦ DOCX 다운로드"
+            )
+
             # ──── 플롯 생성 ────
             col_w1, col_w2 = st.columns(2)
             with col_w1:
-                if st.button(f"📐 EP{selected_ep} 플롯 생성", use_container_width=True):
+                if st.button(
+                    f"① EP{selected_ep} 플롯 생성",
+                    use_container_width=True,
+                    type="primary" if not _p_plot else "secondary",
+                ):
                     with st.spinner("플롯 설계 중..."):
                         ep_arc = next(
                             (ep for ep in target_arc if ep.get("ep") == selected_ep), {}
@@ -1864,10 +1924,13 @@ with tab3:
 
             with col_w2:
                 plot_ready = selected_ep in st.session_state.episode_plots
+                if not plot_ready:
+                    st.caption("① 플롯 생성을 먼저 실행해주세요.")
                 if st.button(
-                    f"✍️ EP{selected_ep} 본문 집필",
+                    f"② EP{selected_ep} 본문 집필",
                     use_container_width=True,
                     disabled=not plot_ready,
+                    type="primary" if (_p_plot and not _p_text) else "secondary",
                 ):
                     with st.spinner(f"EP{selected_ep} 집필 중... (Opus 사용)"):
                         profession_blocks = auto_inject_profession_blocks(st.session_state.concept_card)
@@ -1896,7 +1959,7 @@ with tab3:
 
             # ──── 플롯 표시 ────
             if selected_ep in st.session_state.episode_plots:
-                with st.expander(f"📐 EP{selected_ep} 플롯", expanded=False):
+                with st.expander(f"① EP{selected_ep} 플롯 (생성 결과)", expanded=False):
                     st.json(st.session_state.episode_plots[selected_ep])
 
             # ──── 본문 표시 ────
@@ -1905,73 +1968,8 @@ with tab3:
             current_ep = ep19 if rating == "19금" else ep15
 
             if current_ep:
-                st.markdown(f'<div class="sub-tab-header">📖 EP{selected_ep} 본문 ({rating})</div>',
+                st.markdown(f'<div class="sub-tab-header">② EP{selected_ep} 본문 ({rating})</div>',
                             unsafe_allow_html=True)
-
-                col_tool1, col_tool2, col_tool3, col_tool4 = st.columns(4)
-                with col_tool1:
-                    if rating == "19금" and st.button("🔄 15금 변환", use_container_width=True):
-                        with st.spinner("변환 중..."):
-                            converted = call_claude(
-                                build_rating_convert_prompt(current_ep),
-                                max_tokens=MAX_TOKENS_EPISODE,
-                            )
-                            st.session_state.episodes_15[selected_ep] = converted
-                            st.success("✅ 15금 변환 완료")
-                            st.rerun()
-
-                with col_tool2:
-                    if st.button("🔍 품질 체크", use_container_width=True):
-                        with st.spinner("분석 중..."):
-                            raw = call_claude(
-                                build_quality_check_prompt(
-                                    current_ep,
-                                    selected_ep,
-                                    json.dumps(st.session_state.character_bible, ensure_ascii=False),
-                                    json.dumps(st.session_state.concept_card, ensure_ascii=False),
-                                ),
-                                max_tokens=MAX_TOKENS_ANALYSIS,
-                            )
-                            parsed = safe_json(raw)
-                            if parsed:
-                                st.session_state.quality_reports[selected_ep] = parsed
-                                st.success("✅ 품질 체크 완료")
-                                st.rerun()
-
-                with col_tool3:
-                    if st.button("📝 회차 요약", use_container_width=True):
-                        with st.spinner("요약 중..."):
-                            summary = call_claude(
-                                build_episode_summary_prompt(current_ep, selected_ep),
-                                max_tokens=1000,
-                            )
-                            st.session_state.episode_summaries[selected_ep] = summary
-                            st.success("✅ 요약 완료")
-                            st.rerun()
-
-                with col_tool4:
-                    # DOCX 다운로드
-                    try:
-                        # rating 파라미터: "19" / "15" 형식 (docx_builder 규약)
-                        rating_code = "19" if rating == "19금" else "15"
-                        docx_bytes = build_episode_docx(
-                            current_ep,
-                            selected_ep,
-                            concept=st.session_state.concept_card,
-                            rating=rating_code,
-                            platform=platform,
-                        )
-                        title = st.session_state.concept_card.get("title", "wuxia")
-                        safe_title = re.sub(r"[^\w\-]", "_", title)
-                        st.download_button(
-                            "📥 DOCX 다운로드",
-                            data=docx_bytes,
-                            file_name=f"{safe_title}_EP{selected_ep:03d}_{rating}.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            use_container_width=True,
-                        )
-                    except Exception as e:
-                        st.caption(f"DOCX 생성 실패: {e}")
 
                 # 본문 표시
                 st.text_area(
@@ -1981,21 +1979,8 @@ with tab3:
                     label_visibility="collapsed",
                 )
 
-                # 품질 리포트
-                if selected_ep in st.session_state.quality_reports:
-                    with st.expander("🔍 품질 리포트", expanded=False):
-                        qr = st.session_state.quality_reports[selected_ep]
-                        score = qr.get("overall_score", 0)
-                        st.metric("종합 점수", f"{score}/100")
-                        for item in qr.get("items", []):
-                            status = item.get("status", "")
-                            emoji = {"pass": "✅", "warning": "⚠️", "fail": "❌"}.get(status, "•")
-                            st.markdown(
-                                f"{emoji} **{item.get('category')}** · {item.get('item')}: {item.get('issue', '')}"
-                            )
-
                 # ──── v2.0 자가 검수 시스템 ────
-                st.markdown('<div class="sub-tab-header">🔬 v2.0 자가 검수 (5축 종합)</div>', unsafe_allow_html=True)
+                st.markdown('<div class="sub-tab-header">🔬 ③④ 자가 검수 (5축 종합)</div>', unsafe_allow_html=True)
 
                 # 검수 모드 결정
                 col_v1, col_v2 = st.columns([2, 1])
@@ -2039,7 +2024,7 @@ with tab3:
                 col_v3, col_v4 = st.columns(2)
                 with col_v3:
                     if st.button(
-                        "📐 규칙 기반 자가 검수 (즉시·무료)",
+                        "③ 규칙 기반 자가 검수 (즉시 · 무료)",
                         use_container_width=True,
                         key=f"rule_validate_{selected_ep}",
                     ):
@@ -2057,7 +2042,7 @@ with tab3:
 
                 with col_v4:
                     if st.button(
-                        "🤖 LLM 깊이 검수 (Sonnet)",
+                        "④ LLM 깊이 검수 (Sonnet · 1~2분)",
                         use_container_width=True,
                         key=f"llm_validate_{selected_ep}",
                     ):
@@ -2226,7 +2211,7 @@ with tab3:
                     if verdict == "REDO":
                         st.warning("⚠️ 재집필 권장 등급입니다.")
                         if st.button(
-                            "🔄 약점 보완 재집필 실행",
+                            "⑤ 약점 보완 재집필 실행",
                             use_container_width=True,
                             key=f"redo_{selected_ep}",
                             type="primary",
@@ -2357,8 +2342,134 @@ with tab3:
                                     st.success("✅ 수동 검수 모드로 전환")
                                     st.rerun()
 
+                # ──── ⑥⑦ 마무리 · 요약과 저장 (v2.7.1) ────
+                # 종전에는 본문 상단에 있었다. 검수를 통과하지 않은 원고로
+                # 요약을 뜨면 그 요약이 다음 회차 플롯의 재료로 흘러가고,
+                # DOCX도 검수 전 원고가 내려간다. 두 작업을 맨 뒤로 옮긴다.
+                st.markdown(
+                    '<div class="sub-tab-header">⑥⑦ 마무리 · 요약과 저장</div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(
+                    "검수를 통과한 확정본에서 실행합니다. "
+                    "⑥ 회차 요약은 다음 회차 플롯의 재료로 들어갑니다."
+                )
+
+                col_fin1, col_fin2 = st.columns(2)
+                with col_fin1:
+                    _summ_done = bool(st.session_state.episode_summaries.get(selected_ep))
+                    if st.button(
+                        "⑥ 회차 요약 (완료 · 다시 실행)" if _summ_done else "⑥ 회차 요약",
+                        use_container_width=True,
+                        key=f"summarize_{selected_ep}",
+                    ):
+                        with st.spinner("요약 중..."):
+                            summary = call_claude(
+                                build_episode_summary_prompt(current_ep, selected_ep),
+                                max_tokens=1000,
+                            )
+                            st.session_state.episode_summaries[selected_ep] = summary
+                            st.success("✅ 요약 완료")
+                            st.rerun()
+
+                with col_fin2:
+                    # DOCX 다운로드
+                    try:
+                        # rating 파라미터: "19" / "15" 형식 (docx_builder 규약)
+                        rating_code = "19" if rating == "19금" else "15"
+                        docx_bytes = build_episode_docx(
+                            current_ep,
+                            selected_ep,
+                            concept=st.session_state.concept_card,
+                            rating=rating_code,
+                            platform=platform,
+                        )
+                        title = st.session_state.concept_card.get("title", "wuxia")
+                        safe_title = re.sub(r"[^\w\-]", "_", title)
+                        st.download_button(
+                            "⑦ DOCX 다운로드",
+                            data=docx_bytes,
+                            file_name=f"{safe_title}_EP{selected_ep:03d}_{rating}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                        )
+                    except Exception as e:
+                        st.caption(f"DOCX 생성 실패: {e}")
+
+                if st.session_state.episode_summaries.get(selected_ep):
+                    with st.expander(f"📝 EP{selected_ep} 요약 보기", expanded=False):
+                        st.markdown(st.session_state.episode_summaries[selected_ep])
+
+                # ──── 보조 도구 (v2.7.1 — 번호 순서와 무관한 선택 작업) ────
+                st.markdown(
+                    '<div class="sub-tab-header">🧰 보조 도구 (선택 · 순서 무관)</div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption("①~⑦ 진행에는 필요하지 않습니다. 필요할 때만 사용합니다.")
+
+                col_ex1, col_ex2 = st.columns(2)
+                with col_ex1:
+                    if rating == "19금":
+                        if st.button(
+                            "🔄 15금 변환",
+                            use_container_width=True,
+                            key=f"convert15_{selected_ep}",
+                        ):
+                            with st.spinner("변환 중..."):
+                                converted = call_claude(
+                                    build_rating_convert_prompt(current_ep),
+                                    max_tokens=MAX_TOKENS_EPISODE,
+                                )
+                                st.session_state.episodes_15[selected_ep] = converted
+                                st.success("✅ 15금 변환 완료")
+                                st.rerun()
+                    else:
+                        st.button(
+                            "🔄 15금 변환",
+                            use_container_width=True,
+                            disabled=True,
+                            key=f"convert15_off_{selected_ep}",
+                        )
+                        st.caption("19금으로 집필한 회차에서만 사용합니다.")
+
+                with col_ex2:
+                    if st.button(
+                        "🔍 품질 체크 (구버전)",
+                        use_container_width=True,
+                        key=f"quality_{selected_ep}",
+                    ):
+                        with st.spinner("분석 중..."):
+                            raw = call_claude(
+                                build_quality_check_prompt(
+                                    current_ep,
+                                    selected_ep,
+                                    json.dumps(st.session_state.character_bible, ensure_ascii=False),
+                                    json.dumps(st.session_state.concept_card, ensure_ascii=False),
+                                ),
+                                max_tokens=MAX_TOKENS_ANALYSIS,
+                            )
+                            parsed = safe_json(raw)
+                            if parsed:
+                                st.session_state.quality_reports[selected_ep] = parsed
+                                st.success("✅ 품질 체크 완료")
+                                st.rerun()
+                    st.caption("③④ 5축 검수와 기능이 겹칩니다.")
+
+                # 품질 리포트 (구버전 품질 체크 결과)
+                if selected_ep in st.session_state.quality_reports:
+                    with st.expander("🔍 품질 리포트", expanded=False):
+                        qr = st.session_state.quality_reports[selected_ep]
+                        score = qr.get("overall_score", 0)
+                        st.metric("종합 점수", f"{score}/100")
+                        for item in qr.get("items", []):
+                            status = item.get("status", "")
+                            emoji = {"pass": "✅", "warning": "⚠️", "fail": "❌"}.get(status, "•")
+                            st.markdown(
+                                f"{emoji} **{item.get('category')}** · {item.get('item')}: {item.get('issue', '')}"
+                            )
+
                 # 독자 시뮬레이터
-                with st.expander("👥 독자 시뮬레이터", expanded=False):
+                with st.expander("👥 독자 시뮬레이터 (선택)", expanded=False):
                     persona_choice = st.selectbox(
                         "페르소나",
                         list(READER_PERSONAS.keys()),

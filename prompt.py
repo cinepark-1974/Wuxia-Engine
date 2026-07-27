@@ -1,10 +1,13 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.7.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.7.1 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.7.1 (2026-07-27) — STEP 3 작업 순서 직관화 (UI 전용)
+  · main.py의 STEP 3 버튼 배치·번호 체계 변경에 따른 버전 동기화.
+    프롬프트 · 룰 · 상수 정의 변경 없음.
 v2.7.0 (2026-07-26) — Martial Codex (성장하는 무공 대전)
   · [사고 원인] martial_bible이 기획서 1회 추출로 끝나고 쓰기 경로가
     없었다. 실측: 작가 원고 EP1에서 8종, EP2에서 4종이 바이블 밖에서
@@ -180,8 +183,8 @@ import json
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.7.0"
-ENGINE_BUILD_DATE = "2026-07-26"
+ENGINE_VERSION = "v2.7.1"
+ENGINE_BUILD_DATE = "2026-07-27"
 
 # ═══════════════════════════════════════════════════
 # SYSTEM PROMPT — 무협 웹소설 작가 페르소나
