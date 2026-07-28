@@ -1,10 +1,18 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.6.0 — engine_validator.py
+👖 BLUE JEANS WUXIA ENGINE v2.7.2 — engine_validator.py
 ═══════════════════════════════════════════════════════════
 회차 자가 검수 · 재료 활용 검증 · 전환점 자동 감지 · 문체 정적 스캐너
 · 초식 일관성 정적 검사 · 장르 밀도 정적 검사
 
 [변경 이력]
+v2.7.2 (2026-07-28) — A32 문장 선두 기호 검출
+  · scan_prose_style()에 A32 검출 2종 추가
+    — 대사·문장 선두 말줄임표 ("……네." / …그러니까)
+    — 문단 선두 대시 (——그런데 몸이 …)
+  · 장면 구분선(*** / ··· 등 기호 전용 줄)은 검출 대상에서 제외
+  · 아미고 EP002 실측: 선두 말줄임표 11건 / 선두 대시 3건
+  · 설계 원칙 K 유지 — 검출만 하고 본문은 수정하지 않는다
+
 v2.6.0 (2026-07-26) — Genre Density Scanner + 감점 방향 반전
   · [사고 패턴 N — 검수기가 정답을 오답으로 판정] 아미고 실측:
       작가 원고 EP2 (초식 9종·병기 16회) → MISE_EN_SCENE 80점
@@ -1244,6 +1252,15 @@ _PRECISION_ADVERBS = ["미세하게", "미묘하게"]
 _MEASURE_NOUNS = ["각도", "궤적", "좌표", "어깨선"]
 
 
+# ── A32 (v2.7.2): 문장 선두 기호 검출용 ──
+# 여는 따옴표 직후 또는 줄 맨 앞의 말줄임표
+_LEAD_ELLIPSIS_RE = re.compile(r'(?:^|["“”\'‘’「『(\[])\s*(?:…+|\.{2,})')
+# 줄 맨 앞의 대시 (뒤에 글자가 이어지는 경우만 — 구분선은 제외)
+_LEAD_DASH_RE = re.compile(r'^\s*(?:[—–―]{1,3}|-{2,})\s*(?=\S)')
+# 장면 구분선 문자 (검출에서 제외)
+_SEPARATOR_CHARS = set("*＊·•◦・∙※◇◆◈○●□■△▲—–―-~=＝#§†✦✧")
+
+
 def _find_lines_with(text: str, needle: str) -> List[str]:
     """needle이 포함된 줄을 발췌 (앞뒤 여백 정리, 최대 60자)."""
     out = []
@@ -1335,6 +1352,37 @@ def scan_prose_style(text: str, character_bible: dict = None) -> dict:
             "label": '"~하는 것이었다" 구문 남용',
             "count": cnt,
             "samples": _find_lines_with(text, "는 것이었다")[:3],
+        })
+
+    # ── A32. 문장 선두 기호 (v2.7.2 신규) ──
+    # 대사 선두 말줄임표 / 문단 선두 대시. 한국 독자가 AI 문체를
+    # 식별하는 1순위 단서이므로 1건이라도 잡아 보고한다.
+    lead_dots, lead_dash = [], []
+    for line in text.split("\n"):
+        s = line.strip()
+        if not s:
+            continue
+        # 기호로만 이루어진 짧은 줄(장면 구분선)은 제외
+        if len(s) <= 12 and all(ch in _SEPARATOR_CHARS for ch in s.replace(" ", "")):
+            continue
+        if _LEAD_ELLIPSIS_RE.search(s):
+            lead_dots.append(s[:60] + ("…" if len(s) > 60 else ""))
+        if _LEAD_DASH_RE.match(s):
+            lead_dash.append(s[:60] + ("…" if len(s) > 60 else ""))
+
+    if lead_dots:
+        violations.append({
+            "rule": "A32",
+            "label": "문장·대사 선두 말줄임표 (“……네.” 형태)",
+            "count": len(lead_dots),
+            "samples": lead_dots[:5],
+        })
+    if lead_dash:
+        violations.append({
+            "rule": "A32",
+            "label": "문단 선두 대시 (——그런데 … 형태)",
+            "count": len(lead_dash),
+            "samples": lead_dash[:5],
         })
 
     # ── A24. 반복 어간 검출 (버릇·습관·소품 과잉 반복 감지) ──
