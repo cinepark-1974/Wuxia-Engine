@@ -1,10 +1,23 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.7.2 — engine_validator.py
+👖 BLUE JEANS WUXIA ENGINE v2.9.0 — engine_validator.py
 ═══════════════════════════════════════════════════════════
 회차 자가 검수 · 재료 활용 검증 · 전환점 자동 감지 · 문체 정적 스캐너
 · 초식 일관성 정적 검사 · 장르 밀도 정적 검사
 
 [변경 이력]
+v2.9.0 (2026-11-06) — 세계 유형 · 판타지 수위 연동 (World Type Pack)
+  · scan_wuxia_density(concept_card=) 인자 추가 — 판타지 수위별 쿼터 프로필
+    (WUXIA_DENSITY_PROFILES · get_density_quotas). 수위 2~3은 기존 A29 그대로,
+    수위 0~1은 한자 병기·3박자·경지 노출 쿼터를 끄고 "무공 0종 강제 FAIL"을 해제.
+    concept_card를 넘기지 않으면 기존 동작과 동일 (하위 호환)
+  · 조선 역사형은 문파 쿼터를 "제도·군영·관청 좌표"로 계측 (오군영·포도청 등)
+  · scan_world_consistency() / format_world_consistency_report() 신설 — A33
+      시대착오: 현대 작품의 냥·시진·객잔 / 조선 작품의 마교·무림맹·중원 경지 /
+               중원 작품의 휴대폰·자동차
+      문헌 연도: 조선 작품 시대가 1790년 이전인데 『무예도보통지』 등장
+      수위 초과: 판타지 수위별 금지 표현 (수위 1의 장풍·검기 등)
+    원칙 K 유지 — 검출만 하고 본문은 수정하지 않는다
+v2.8.1 (2026-11-06) — 버전 동기화 (원고 서식 재복구 패치). 검수 로직 변경 없음
 v2.7.2 (2026-07-28) — A32 문장 선두 기호 검출
   · scan_prose_style()에 A32 검출 2종 추가
     — 대사·문장 선두 말줄임표 ("……네." / …그러니까)
@@ -285,6 +298,27 @@ except ImportError as e:
         "cumulative_pass": 78,
     }
     _PROMPT_OK = False
+
+# v2.9.0: 세계 유형 · 판타지 수위 해석기 (별도 try — 구버전 prompt.py와도 동작)
+try:
+    from prompt import (
+        WORLD_TYPES,
+        FANTASY_LEVELS,
+        resolve_world_type,
+        resolve_fantasy_level,
+    )
+    _WORLD_OK = True
+except ImportError:
+    WORLD_TYPES = {}
+    FANTASY_LEVELS = {}
+
+    def resolve_world_type(concept_card):
+        return "중원_강호"
+
+    def resolve_fantasy_level(concept_card, ep_number=0):
+        return 2
+    _WORLD_OK = False
+
 
 
 # ============================================================================
@@ -1935,6 +1969,58 @@ WUXIA_DENSITY_QUOTAS = [
     ("realms",      "경지·서열 노출",       2, 1),
 ]
 
+# v2.9.0: 판타지 수위별 밀도 쿼터 — (EP1~EP4, EP5 이후). 목표 0은 "해당 없음"으로 제외
+#   수위 2~3 — 기존 A29 쿼터 그대로 (중원 강호 · 현대 무림)
+#   수위 1   — 신체 한계 상향. 초식 명명·병기·경지 노출 압력을 낮춘다
+#   수위 0   — 실전 무예. 내공·경지·병기 쿼터를 끈다
+WUXIA_DENSITY_PROFILES = {
+    2: {k: (o, b) for k, _l, o, b in WUXIA_DENSITY_QUOTAS},
+    1: {"named_arts": (2, 1), "hanja": (0, 0), "three_beat": (0, 0),
+        "factions": (2, 1), "neigong": (2, 1), "onomatopoeia": (2, 1),
+        "realms": (0, 0)},
+    0: {"named_arts": (2, 1), "hanja": (0, 0), "three_beat": (0, 0),
+        "factions": (2, 1), "neigong": (0, 0), "onomatopoeia": (2, 1),
+        "realms": (0, 0)},
+}
+WUXIA_DENSITY_PROFILES[3] = WUXIA_DENSITY_PROFILES[2]
+
+# 조선 역사형 — 제도 좌표로 쓰는 기관명 (검색 확인된 오군영 + 일반 관청명)
+_JOSEON_INSTITUTIONS = [
+    "훈련도감", "어영청", "금위영", "총융청", "수어청",
+    "포도청", "의금부", "승정원", "병조", "형조", "무과",
+]
+
+
+# 『무예도보통지』(1790) 24기 기예명 — 조선 역사형 기예명 계측용 (검색 확인)
+_JOSEON_MUYE_NAMES = [
+    "죽장창", "장창", "기창", "당파", "낭선", "쌍수도", "예도", "왜검",
+    "제독검", "본국검", "마상쌍검", "쌍검", "마상월도", "월도", "협도",
+    "등패", "권법", "곤봉", "마상편곤", "편곤", "격구", "마상재",
+]
+
+
+def get_density_quotas(concept_card=None, ep_number: int = 0):
+    """세계 유형·판타지 수위에 맞는 밀도 쿼터 — [(key, label, open_t, base_t)].
+
+    concept_card가 없으면 기존 A29 쿼터(수위 2)를 그대로 돌려준다 (하위 호환).
+    """
+    if not concept_card:
+        return list(WUXIA_DENSITY_QUOTAS)
+    lv = resolve_fantasy_level(concept_card, ep_number)
+    prof = WUXIA_DENSITY_PROFILES.get(lv, WUXIA_DENSITY_PROFILES[2])
+    out = []
+    for key, label, _o, _b in WUXIA_DENSITY_QUOTAS:
+        o, b = prof.get(key, (0, 0))
+        if o == 0 and b == 0:
+            continue
+        if key == "factions" and resolve_world_type(concept_card) == "조선_역사":
+            label = "제도·군영·관청 좌표"
+        if key == "named_arts" and lv <= 1:
+            label = "기예명·무예명 (실존·바이블 등록)"
+        out.append((key, label, o, b))
+    return out
+
+
 # 명명 회피 관용구 — A29 절대 금지 항목
 _NAMING_EVASION_PATTERNS = [
     "초식이라 부를 것도", "초식이라고 할 것도", "이름을 붙일 것도",
@@ -1944,13 +2030,16 @@ _NAMING_EVASION_PATTERNS = [
 
 
 def scan_wuxia_density(text: str, ep_number: int = 0,
-                       martial_bible: dict = None) -> dict:
+                       martial_bible: dict = None,
+                       concept_card: dict = None) -> dict:
     """A29~A31 장르 밀도 정량 검사 — v2.6.0 신규.
 
     Args:
         text: 회차 본문
         ep_number: 회차 번호. 1~4면 도입부 강화 임계값을 적용한다.
         martial_bible: 초식 바이블 (있으면 무공·문파 판정 정확도 상승)
+        concept_card: 컨셉 카드 (v2.9.0 — 있으면 세계 유형·판타지 수위별
+            쿼터를 적용. 없으면 기존 A29 쿼터)
 
     Returns:
         {
@@ -1966,12 +2055,16 @@ def scan_wuxia_density(text: str, ep_number: int = 0,
           "flags": [str],
         }
     """
+    quotas_spec = get_density_quotas(concept_card, ep_number)
+    level = resolve_fantasy_level(concept_card, ep_number) if concept_card else 2
+    world = resolve_world_type(concept_card) if concept_card else ""
     result = {
         "ep_number": ep_number,
         "is_opening": bool(1 <= ep_number <= 4),
         "metrics": {}, "quotas": [], "achieved": 0,
-        "total": len(WUXIA_DENSITY_QUOTAS),
+        "total": len(quotas_spec),
         "grade": "FAIL", "named_arts": [], "evasion_hits": [], "flags": [],
+        "fantasy_level": level, "world_type": world,
     }
     if not text or not isinstance(text, str):
         return result
@@ -1980,6 +2073,14 @@ def scan_wuxia_density(text: str, ep_number: int = 0,
 
     # ── ① 이름 붙은 무공 ──
     named = _extract_named_arts(text, terms.get("arts"))
+    if world == "조선_역사":
+        # 긴 이름부터 확인 — "마상쌍검" 안의 "쌍검"을 중복으로 세지 않는다
+        _rest = text
+        for nm in sorted(_JOSEON_MUYE_NAMES, key=len, reverse=True):
+            if nm in _rest:
+                if nm not in named:
+                    named.append(nm)
+                _rest = _rest.replace(nm, " ")
     result["named_arts"] = named
     m_named = len(named)
 
@@ -1998,6 +2099,8 @@ def scan_wuxia_density(text: str, ep_number: int = 0,
 
     # ── ④ 문파·계보 귀속 ──
     faction_pool = set(_GENERIC_FACTIONS)
+    if world == "조선_역사":
+        faction_pool |= set(_JOSEON_INSTITUTIONS)
     for grp in (martial_bible or {}).get("faction_arts") or []:
         if isinstance(grp, dict) and grp.get("faction"):
             for piece in re.split(r"[/·,]", str(grp["faction"])):
@@ -2033,7 +2136,7 @@ def scan_wuxia_density(text: str, ep_number: int = 0,
     }
 
     # ── 쿼터 판정 ──
-    for key, label, open_t, base_t in WUXIA_DENSITY_QUOTAS:
+    for key, label, open_t, base_t in quotas_spec:
         target = open_t if result["is_opening"] else base_t
         value = result["metrics"].get(key, 0)
         ok = value >= target
@@ -2061,27 +2164,33 @@ def scan_wuxia_density(text: str, ep_number: int = 0,
     else:
         result["grade"] = "FAIL"
 
-    # 이름 붙은 무공 0종은 다른 지표와 무관하게 FAIL
-    if m_named == 0:
+    # 이름 붙은 무공 0종은 다른 지표와 무관하게 FAIL (수위 2 이상)
+    hi = level >= 2
+    if m_named == 0 and hi:
         result["grade"] = "FAIL"
 
     # ── 경보 ──
-    if m_named == 0:
+    if not hi:
+        result["flags"].append(
+            f"판타지 수위 {level} 작품 — A29 중원 무협 쿼터 대신 실전 무예 "
+            f"기준을 적용했습니다 (한자 병기·3박자·경지 노출 제외)."
+        )
+    if m_named == 0 and hi:
         result["flags"].append(
             "A29 치명 위반 — 이름 붙은 무공이 0종입니다. 무공 장면이 "
             "이름 없는 격투로 처리됐습니다. 이 회차는 무협으로 읽히지 않습니다."
         )
-    elif result["is_opening"] and m_named < 5:
+    elif result["is_opening"] and m_named < 5 and hi:
         result["flags"].append(
             f"A29 위반 — 도입 4화 구간인데 이름 붙은 무공이 {m_named}종입니다 "
             f"(목표 5종). 독자는 1~4화에서 장르를 판정합니다."
         )
-    if m_hanja < 4:
+    if m_hanja < 4 and hi:
         result["flags"].append(
             f"A15·A29 위반 — 한자 병기 {m_hanja}회. 고유명사 병기가 부족합니다 "
             f"(정상 8~15회)."
         )
-    if m_three == 0:
+    if m_three == 0 and hi:
         result["flags"].append(
             "A30 위반 — 3박자 완주 0회. 무공의 원리·문파 귀속·장단점을 "
             "설명하는 해설이 없습니다. 무협 독자의 과금 지점이 비어 있습니다."
@@ -2118,6 +2227,8 @@ def format_wuxia_density_report(scan: dict, ep_number: int = 0) -> str:
     grade = scan.get("grade", "?")
     icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "🚨"}.get(grade, "•")
     scope = "도입 4화 강화 기준" if scan.get("is_opening") else "일반 회차 기준"
+    if scan.get("world_type"):
+        scope += f" · {scan['world_type']} · 판타지 수위 {scan.get('fantasy_level', 2)}"
 
     lines = [
         f"### {icon} 무협 장르 밀도 (A29~A31)" + (f" — EP{ep}" if ep else ""),
@@ -2156,6 +2267,134 @@ def format_wuxia_density_report(scan: dict, ep_number: int = 0) -> str:
             for s in e.get("samples", []):
                 lines.append(f"    · `{s}`")
 
+    lines.append("\n> 검사는 검출만 합니다. 수정 여부와 방식은 작가의 판단입니다.")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════
+# v2.9.0 — 세계 유형 · 판타지 수위 정합 검사 (A33)
+#
+# 시대착오(현대 작품의 냥·시진, 조선 작품의 마교·무림맹, 중원 작품의
+# 휴대폰)와 수위 초과(수위 1 작품의 장풍·검기)를 정적으로 검출한다.
+# LLM 미사용, 재현성 100%. 검출만 하고 본문은 수정하지 않는다 (원칙 K).
+# ═══════════════════════════════════════════════════════════
+_ANACHRONISM_PATTERNS = {
+    "현대_무림": [
+        ("왕조 화폐(냥)", r"(?:[0-9]+|[일이삼사오육칠팔구십백천만]{1,4})\s?냥(?:[을이은의도씩에]|짜리|으로|\s|$|[.,!?”\"’'])"),
+        ("왕조 화폐(문)", r"(?:[0-9]+|[일이삼사오육칠팔구십백천만]{1,4})\s?문(?:짜리|의 돈|을 내)"),
+        ("시진 표기", r"시진"),
+        ("12시 표기", r"(?:자시|축시|인시|묘시|해시|술시)(?:[가-힣]{0,2}\s|에|가|쯤|경)"),
+        ("일각 표기", r"일각(?:이 지나|쯤|후|만에|도 안)"),
+        ("왕조 숙박(객잔)", r"객잔"),
+    ],
+    "조선_역사": [
+        ("중원 세력(구파일방)", r"구파일방"),
+        ("중원 세력(마교)", r"마교|천마신교|일월신교"),
+        ("중원 세력(무림맹)", r"무림맹"),
+        ("중원 세력(오대세가)", r"오대세가"),
+        ("중원 경지 서열", r"(?:삼류|이류|일류|절정|초절정|화경|현경|생사경)(?:의 경지| 고수|에 오른|에 이른)"),
+        ("현대 문물", r"휴대폰|핸드폰|스마트폰|자동차|지하철|인터넷"),
+    ],
+    "중원_강호": [
+        ("현대 문물", r"휴대폰|핸드폰|스마트폰|자동차|지하철|택시|노트북|인터넷|CCTV"),
+    ],
+}
+
+
+def _bible_max_year(concept_card) -> int:
+    """세계관 바이블의 시대 범위에서 가장 늦은 서기 연도를 추출 (없으면 0)."""
+    cc = concept_card if isinstance(concept_card, dict) else {}
+    wb = cc.get("world_bible") if isinstance(cc.get("world_bible"), dict) else {}
+    txt = " ".join(str(wb.get(k) or "") for k in ("era_range", "historical_events"))
+    years = [int(y) for y in re.findall(r"(1[3-9]\d{2})", txt)]
+    return max(years) if years else 0
+
+
+def scan_world_consistency(text: str, concept_card: dict = None,
+                           ep_number: int = 0) -> dict:
+    """A33 세계 유형·판타지 수위 정합 검사 — v2.9.0 신규.
+
+    Returns:
+        {
+          "world_type": str, "fantasy_level": int,
+          "anachronisms": [{"label","count","samples"}],
+          "overreach": [{"term","count","samples"}],
+          "flags": [str], "clean": bool,
+        }
+    """
+    world = resolve_world_type(concept_card) if concept_card else "중원_강호"
+    level = resolve_fantasy_level(concept_card, ep_number) if concept_card else 2
+    result = {
+        "world_type": world, "fantasy_level": level,
+        "anachronisms": [], "overreach": [], "flags": [], "clean": True,
+    }
+    if not text or not isinstance(text, str):
+        return result
+    lines = text.split("\n")
+
+    def _samples(rx):
+        out = []
+        for ln in lines:
+            if re.search(rx, ln):
+                out.append(ln.strip()[:80])
+            if len(out) >= 2:
+                break
+        return out
+
+    for label, rx in _ANACHRONISM_PATTERNS.get(world, []):
+        n = len(re.findall(rx, text))
+        if n:
+            result["anachronisms"].append(
+                {"label": label, "count": n, "samples": _samples(rx)})
+
+    # 문헌 성립 연도 대조 — 『무예도보통지』는 1790년(정조 14) 편찬
+    if world == "조선_역사" and "무예도보통지" in text:
+        my = _bible_max_year(concept_card)
+        if my and my < 1790:
+            result["anachronisms"].append({
+                "label": f"문헌 연도 — 『무예도보통지』(1790)가 작품 시대({my}년 이전)에 등장",
+                "count": text.count("무예도보통지"),
+                "samples": _samples("무예도보통지"),
+            })
+
+    spec = FANTASY_LEVELS.get(level, {}) if FANTASY_LEVELS else {}
+    for term in spec.get("forbidden_terms", []):
+        n = text.count(term)
+        if n:
+            result["overreach"].append(
+                {"term": term, "count": n, "samples": _samples(re.escape(term))})
+
+    if result["anachronisms"]:
+        result["flags"].append(
+            f"A33 시대착오 — {world} 세계에 맞지 않는 표기 "
+            f"{sum(a['count'] for a in result['anachronisms'])}건")
+    if result["overreach"]:
+        result["flags"].append(
+            f"A33 수위 초과 — 판타지 수위 {level} 회차에 금지 표현 "
+            f"{sum(o['count'] for o in result['overreach'])}건")
+    result["clean"] = not (result["anachronisms"] or result["overreach"])
+    return result
+
+
+def format_world_consistency_report(scan: dict, ep_number: int = 0) -> str:
+    """세계 정합 검사 리포트 (UI 표시 · REDO 주입 공용)."""
+    if not scan:
+        return ""
+    icon = "✅" if scan.get("clean") else "⚠️"
+    lines = [
+        f"### {icon} 세계 유형 · 판타지 수위 정합 (A33)" + (f" — EP{ep_number}" if ep_number else ""),
+        f"세계 유형 **{scan.get('world_type')}** · 판타지 수위 **{scan.get('fantasy_level')}**",
+    ]
+    if scan.get("clean"):
+        lines.append("\n시대착오·수위 초과 표현이 검출되지 않았습니다.")
+    for a in scan.get("anachronisms", []):
+        lines.append(f"\n- 시대착오 · {a['label']} — {a['count']}건")
+        for smp in a.get("samples", []):
+            lines.append(f"    · `{smp}`")
+    for o in scan.get("overreach", []):
+        lines.append(f"\n- 수위 초과 · \"{o['term']}\" — {o['count']}건")
+        for smp in o.get("samples", []):
+            lines.append(f"    · `{smp}`")
     lines.append("\n> 검사는 검출만 합니다. 수정 여부와 방식은 작가의 판단입니다.")
     return "\n".join(lines)
 

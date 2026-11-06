@@ -8,6 +8,20 @@ DOCX 출력 모듈
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.8.1 (2026-11-06) — 원고 서식 재복구 (사고 패턴 F 재발 대응)
+  · [사고 원인] 2026-07-27 v2.8.0(둥근 따옴표·함초롬바탕·여백 2.0cm)이
+    완성됐지만, 2026-07-28 v2.7.2(A32·구분선 정렬) 패치가 v2.8.0이 아닌
+    v2.7.1 파일 위에 얹혀 커밋되면서 v2.8.0 전체가 다시 소실됐다.
+    같은 서식 기능의 소실은 v2.2.0에 이어 두 번째다.
+  · 재적용 범위 — v2.7.2의 _is_scene_break()·_add_scene_break()는 보존
+    — to_smart_quotes(): 곧은 따옴표 → 둥근 따옴표. 줄 단위 열림/닫힘,
+      영문 아포스트로피(don't) 예외, 멱등. DOCX 출력 경로 전용이며
+      session_state의 회차 본문은 수정하지 않는다 (코드 작업 규칙 7)
+    — MANUSCRIPT_FONT = "함초롬바탕": 회차·시즌 DOCX의 제목·본문·구분선
+      (기획서·무공 대전은 맑은 고딕 유지)
+    — PAGE_MARGIN_CM = 2.0 + _setup_page(): DOCX 4종 A4·여백 통일
+  · 재발 방지: 패치 기준 파일은 항상 GitHub 최신 커밋에서 직접 받는다
+
 v2.7.2 (2026-07-28) — 장면 구분선 가운데 정렬
   · _is_scene_break() 신설 — 기호로만 이루어진 짧은 줄을 장면 구분선으로
     판정 (*** / * * * / ··· / ※ / ◇ 등)
@@ -55,10 +69,87 @@ YELLOW_BG = "FFCB05"
 BODY_FONT = "맑은 고딕"  # 범용. 나눔고딕으로도 변경 가능
 HEADING_FONT = "맑은 고딕"
 
+# v2.8.1: 원고 서식 (회차·시즌 DOCX 전용)
+MANUSCRIPT_FONT = "함초롬바탕"   # 원고 본문·제목. 곧은 따옴표·맑은 고딕은 AI 원고 신호
+PAGE_MARGIN_CM = 2.0            # DOCX 4종 공통 상·하·좌·우 여백
+SMART_QUOTES = True             # 출력 시 둥근 따옴표 변환 on/off
+
 
 # ══════════════════════════════════════════════
 # 공통 유틸
 # ══════════════════════════════════════════════
+# ── v2.8.1: 둥근 따옴표 · 페이지 설정 ──
+def _is_latin_letter(ch):
+    return bool(ch) and (("a" <= ch.lower() <= "z") or ch.isdigit())
+
+
+def _smart_quotes_line(line):
+    """한 줄 안에서 곧은 따옴표를 열림/닫힘 교대로 둥근 따옴표로 바꾼다."""
+    out = []
+    dq_open = False
+    sq_open = False
+    n = len(line)
+    # 짝 없는 작은따옴표(홀수 개)의 마지막 하나는 닫는 모양으로 둔다
+    # 예) "…….'" → “…….’” (엔진 원문 실측 사례)
+    sq_total = line.count("'")
+    sq_seen = 0
+    for i, ch in enumerate(line):
+        if ch == "\u201c":
+            dq_open = True
+        elif ch == "\u201d":
+            dq_open = False
+        elif ch == "\u2018":
+            sq_open = True
+        elif ch == "\u2019":
+            sq_open = False
+
+        if ch == '"':
+            out.append("\u201d" if dq_open else "\u201c")
+            dq_open = not dq_open
+        elif ch == "'":
+            prev = line[i - 1] if i > 0 else ""
+            nxt = line[i + 1] if i + 1 < n else ""
+            sq_seen += 1
+            if _is_latin_letter(prev) and _is_latin_letter(nxt):
+                out.append("\u2019")          # 영문 아포스트로피 (don't)
+            elif sq_total % 2 == 1 and sq_seen == sq_total and not sq_open:
+                out.append("\u2019")          # 짝 없는 마지막 하나
+            else:
+                out.append("\u2019" if sq_open else "\u2018")
+                sq_open = not sq_open
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def to_smart_quotes(text):
+    """곧은 따옴표 → 둥근 따옴표 (v2.8.1 재적용).
+
+    - 곧은 따옴표는 편집자·심사자에게 AI 생성 원고 신호로 읽힌다.
+    - 단락(줄) 단위로 열림/닫힘을 판정한다. 한국 원고의 대사는
+      한 줄에서 열고 닫는 것이 표준이므로 줄 경계에서 상태를 초기화한다.
+    - 이미 둥근 따옴표인 문자는 건드리지 않는다 (멱등).
+    - 원본 문자열을 수정하지 않고 새 문자열을 반환한다.
+    """
+    if not SMART_QUOTES or not isinstance(text, str) or not text:
+        return text
+    if '"' not in text and "'" not in text:
+        return text
+    return "\n".join(_smart_quotes_line(ln) for ln in text.split("\n"))
+
+
+def _setup_page(doc):
+    """A4 + 상·하·좌·우 PAGE_MARGIN_CM 여백 (v2.8.1)."""
+    section = doc.sections[0]
+    section.page_height = Cm(29.7)
+    section.page_width = Cm(21.0)
+    section.top_margin = Cm(PAGE_MARGIN_CM)
+    section.bottom_margin = Cm(PAGE_MARGIN_CM)
+    section.left_margin = Cm(PAGE_MARGIN_CM)
+    section.right_margin = Cm(PAGE_MARGIN_CM)
+    return section
+
+
 # ── v2.7.2: 장면 구분선 ──
 # 기호로만 이루어진 짧은 줄을 장면 구분선으로 본다.
 # 예) ***  / * * *  / ＊＊＊ / ··· / ※ / ◇ / ---
@@ -87,7 +178,7 @@ def _add_scene_break(doc, text):
     para.paragraph_format.space_before = Pt(10)
     para.paragraph_format.space_after = Pt(10)
     para.paragraph_format.line_spacing = 1.5
-    _add_run(para, text.strip(), size=11, color=DARK)
+    _add_run(para, text.strip(), font=MANUSCRIPT_FONT, size=11, color=DARK)
     return para
 
 
@@ -179,14 +270,11 @@ def build_episode_docx(episode_text, episode_number, concept=None,
     """
     doc = Document()
 
-    # 페이지 설정
-    section = doc.sections[0]
-    section.page_height = Cm(29.7)  # A4
-    section.page_width = Cm(21.0)
-    section.top_margin = Cm(2.5)
-    section.bottom_margin = Cm(2.5)
-    section.left_margin = Cm(2.5)
-    section.right_margin = Cm(2.5)
+    # 페이지 설정 — v2.8.1: A4 + 여백 2.0cm (_setup_page 통합)
+    _setup_page(doc)
+
+    # v2.8.1: 곧은 따옴표 → 둥근 따옴표 (출력 경로 전용, 원본 미변경)
+    episode_text = to_smart_quotes(episode_text or "")
 
     # 본문 첫 줄에서 제목 추출
     lines = episode_text.strip().split("\n")
@@ -204,7 +292,7 @@ def build_episode_docx(episode_text, episode_number, concept=None,
     # ── 제목 ──
     title_para = doc.add_paragraph()
     title_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    _add_run(title_para, title_line, font=HEADING_FONT, size=20, bold=True, color=NAVY)
+    _add_run(title_para, title_line, font=MANUSCRIPT_FONT, size=20, bold=True, color=NAVY)
 
     # v2.1.8: 메타 정보 라인(장르·분량·수위·플랫폼) 제거 — 원고에는 제목과 본문만
     _horizontal_rule(doc)
@@ -222,7 +310,7 @@ def build_episode_docx(episode_text, episode_number, concept=None,
         para = doc.add_paragraph()
         para.paragraph_format.space_after = Pt(6)
         para.paragraph_format.line_spacing = 1.5
-        _add_run(para, line, size=11, color=DARK)
+        _add_run(para, line, font=MANUSCRIPT_FONT, size=11, color=DARK)
 
     # ── 푸터 (플롯 정보가 있으면) ──
     if plot:
@@ -262,13 +350,16 @@ def build_season_docx(episodes_dict, concept, rating="19", platform="카카오�
     Returns:
         bytes
     """
+    # v2.8.1: 곧은 따옴표 → 둥근 따옴표 (출력 경로 전용, 원본 미변경)
+    episodes_dict = {
+        k: to_smart_quotes(v or "")
+        for k, v in (episodes_dict or {}).items()
+    }
+
     doc = Document()
 
-    section = doc.sections[0]
-    section.top_margin = Cm(2.5)
-    section.bottom_margin = Cm(2.5)
-    section.left_margin = Cm(2.5)
-    section.right_margin = Cm(2.5)
+    # v2.8.1: A4 + 여백 2.0cm (_setup_page 통합)
+    _setup_page(doc)
 
     # ── 커버 페이지 ──
     for _ in range(3):
@@ -290,7 +381,8 @@ def build_season_docx(episodes_dict, concept, rating="19", platform="카카오�
 
     logline_para = doc.add_paragraph()
     logline_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _add_run(logline_para, concept.get("logline", ""), size=12, italic=True, color=DARK)
+    _add_run(logline_para, to_smart_quotes(concept.get("logline", "")),
+             size=12, italic=True, color=DARK)
 
     for _ in range(5):
         doc.add_paragraph()
@@ -338,7 +430,7 @@ def build_season_docx(episodes_dict, concept, rating="19", platform="카카오�
         # 회차 제목
         title_para = doc.add_paragraph()
         title_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        _add_run(title_para, title_line, font=HEADING_FONT, size=18, bold=True, color=NAVY)
+        _add_run(title_para, title_line, font=MANUSCRIPT_FONT, size=18, bold=True, color=NAVY)
 
         # 본문 — v2.1.8: 빈 단락 제거 + 행간 1.5 (회차 DOCX와 동일 서식)
         # v2.7.2: *** 등 장면 구분선은 가운데 정렬
@@ -351,7 +443,7 @@ def build_season_docx(episodes_dict, concept, rating="19", platform="카카오�
             para = doc.add_paragraph()
             para.paragraph_format.space_after = Pt(6)
             para.paragraph_format.line_spacing = 1.5
-            _add_run(para, line, size=11, color=DARK)
+            _add_run(para, line, font=MANUSCRIPT_FONT, size=11, color=DARK)
 
         # 회차 구분
         doc.add_page_break()
@@ -371,11 +463,8 @@ def build_proposal_docx(concept, character_bible=None, core_arc=None,
     """
     doc = Document()
 
-    section = doc.sections[0]
-    section.top_margin = Cm(2.5)
-    section.bottom_margin = Cm(2.5)
-    section.left_margin = Cm(2.5)
-    section.right_margin = Cm(2.5)
+    # v2.8.1: A4 + 여백 2.0cm (_setup_page 통합)
+    _setup_page(doc)
 
     # ── 커버 ──
     for _ in range(3):
@@ -620,11 +709,8 @@ def build_martial_codex_docx(martial_bible, concept=None, title_suffix="무공 �
     martial_bible = martial_bible or {}
     doc = Document()
 
-    sec = doc.sections[0]
-    sec.top_margin = Cm(2.0)
-    sec.bottom_margin = Cm(2.0)
-    sec.left_margin = Cm(2.0)
-    sec.right_margin = Cm(2.0)
+    # v2.8.1: A4 + 여백 2.0cm (_setup_page 통합)
+    _setup_page(doc)
 
     work_title = concept.get("title") or "무제"
 

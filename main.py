@@ -1,9 +1,31 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.7.1 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.9.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.9.0 (2026-11-06) — 세계 유형 축 + 판타지 수위 다이얼 (World Type Pack)
+  · STEP 2에 ⓪ 세계관 바이블 탭 신설 (Core Arc 앞)
+    — 세계 유형 선택: 현대 무림형 / 중원 강호형 / 조선 역사형
+      (저장 전에는 공식 기본값으로 해석 — F4는 현대 무림, 그 외 중원 강호)
+    — 판타지 수위 0~3 + 클라이맥스 구간 수위·시작 회차 (선택)
+    — 세계 유형별 바이블 필드 7~10개 입력 칸
+    — 📄 기획서에서 빈 칸 초안 채우기 (Sonnet). 이미 입력한 칸은 덮어쓰지
+      않는다. 초안은 저장 버튼을 눌러야 반영된다 (작가 확인 단계)
+    — 경지·등급 체계는 기존 세계관·무공 대전 칸이 비어 있을 때만 옮겨 적는다
+    — 값은 concept_card(world_type · fantasy_level · fantasy_peak_* ·
+      world_bible)에 저장되므로 프로젝트 JSON 백업에 자동 포함된다
+  · STEP 3 장르 밀도 검사에 concept_card 전달 — 수위별 쿼터 적용
+  · STEP 3에 🌐 세계 정합 검사 신설 (A33 — 시대착오·수위 초과, API 미사용)
+  · REDO 재집필에 세계 정합 검출 결과 주입
+v2.8.1 (2026-11-06) — 원고 서식 재복구 + 헤더 동기화
+  · docx_builder v2.8.1 (둥근 따옴표·함초롬바탕·여백 2.0cm 재적용) 연동.
+    main.py 코드 변경 없음 — DOCX 빌더 함수 시그니처가 그대로다.
+  · 헤더 누락분 정정: v2.7.2(A32 문장 선두 기호 금지 · 구분선 가운데 정렬)는
+    prompt.py · engine_validator.py · docx_builder.py만 바뀌어 main.py
+    헤더가 v2.7.1에 머물러 있었다. 사이드바 배지는 prompt.py의
+    ENGINE_VERSION을 읽으므로 화면 표시는 원래 정상이었다.
+v2.7.2 (2026-07-28) — A32 문장 선두 기호 금지 + 구분선 정렬 (main.py 변경 없음)
 v2.7.1 (2026-07-27) — STEP 3 작업 순서 직관화 (UI 전용)
   · [사고 원인] STEP 3의 실행 버튼이 세 군데로 흩어져 있고, 화면 순서가
     실제 작업 흐름과 어긋났다. 특히 회차 요약·DOCX 다운로드가 검수보다
@@ -268,6 +290,14 @@ from prompt import (
     get_romance_formula_block,
     # v2.3.0 신규
     is_youth_target,
+    # v2.9.0 신규 — 세계 유형 · 판타지 수위
+    WORLD_TYPES,
+    FANTASY_LEVELS,
+    resolve_world_type,
+    resolve_fantasy_level,
+    build_world_bible_prompt,
+    build_world_bible_block,
+    build_fantasy_level_block,
 )
 from profession_pack import (
     PROFESSION_PACK,
@@ -302,6 +332,8 @@ from engine_validator import (
     format_codex_merge_report,      # v2.7.0 신규
     diagnose_youth_target,          # v2.3.0 신규
     format_youth_diagnosis_report,  # v2.3.0 신규
+    scan_world_consistency,         # v2.9.0 신규
+    format_world_consistency_report,  # v2.9.0 신규
 )
 
 
@@ -1400,17 +1432,168 @@ with tab2:
         st.warning("먼저 STEP 1에서 컨셉 카드를 생성해주세요.")
     else:
         st.caption(
-            "①②③을 순서대로 생성하면 STEP 3 집필로 넘어갈 수 있습니다. "
-            "Extension Arc와 무공 대전은 선택 사항입니다."
+            "⓪ 세계관 바이블을 먼저 확정한 뒤 ①②③을 순서대로 생성하면 "
+            "STEP 3 집필로 넘어갈 수 있습니다. Extension Arc와 무공 대전은 선택 사항입니다."
         )
 
-        build_tab1, build_tab2, build_tab3, build_tab4, build_tab5 = st.tabs([
+        world_tab, build_tab1, build_tab2, build_tab3, build_tab4, build_tab5 = st.tabs([
+            "⓪ 세계관 바이블 (권장)",
             "① Core Arc (50화 · 필수)",
             "Extension Arc (선택)",
             "② Plant & Payoff Map",
             "③ Character Bible",
             "⚔️ 무공 대전 (선택)",
         ])
+
+        # ──── ⓪ 세계관 바이블 · 세계 유형 · 판타지 수위 (v2.9.0) ────
+        with world_tab:
+            st.markdown('<div class="sub-tab-header">세계관 바이블 · 세계 유형 · 판타지 수위</div>', unsafe_allow_html=True)
+            _cc = st.session_state.concept_card
+            st.caption(
+                "세계 유형과 판타지 수위는 Core Arc · 회차 플롯 · 본문 집필 · 장르 밀도 검수 "
+                "기준을 함께 바꿉니다. Core Arc를 만들기 전에 확정하는 것을 권장합니다."
+            )
+
+            _wt_keys = list(WORLD_TYPES.keys())
+            _cur_wt = resolve_world_type(_cc)
+            _sel_wt = st.selectbox(
+                "세계 유형",
+                _wt_keys,
+                index=_wt_keys.index(_cur_wt),
+                format_func=lambda k: f"{WORLD_TYPES[k]['label']} — {WORLD_TYPES[k]['description']}",
+                key="wb_world_type",
+            )
+            if not _cc.get("world_type"):
+                st.caption(
+                    f"아직 저장된 세계 유형이 없어 공식({_cc.get('formula_key', '미정')}) "
+                    f"기본값으로 해석 중입니다. 아래에서 저장하면 확정됩니다."
+                )
+            if _cc.get("world_type") and _sel_wt != _cc.get("world_type") and st.session_state.core_arc:
+                st.warning("Core Arc가 이미 있습니다. 세계 유형을 바꾸면 Core Arc 재생성을 권장합니다.")
+
+            _allowed = WORLD_TYPES[_sel_wt]["allowed_fantasy_levels"]
+            _cur_lv = resolve_fantasy_level(dict(_cc, world_type=_sel_wt), 0)
+            if _cur_lv not in _allowed:
+                _cur_lv = WORLD_TYPES[_sel_wt]["default_fantasy_level"]
+            _lv = st.radio(
+                "판타지 수위 (기본)",
+                _allowed,
+                index=_allowed.index(_cur_lv),
+                format_func=lambda v: FANTASY_LEVELS[v]["label"],
+                horizontal=True,
+                key=f"wb_level_{_sel_wt}",
+            )
+            st.caption(f"허용: {FANTASY_LEVELS[_lv]['allowed']}")
+
+            _has_peak = (_cc.get("fantasy_peak_level") not in (None, "")
+                         and bool(_cc.get("fantasy_peak_from_ep")))
+            _higher = [v for v in _allowed if v > _lv]
+            _peak_lv, _peak_from = None, None
+            if _higher:
+                _use_peak = st.checkbox(
+                    "클라이맥스 구간 수위를 따로 둔다 (예: 후반부만 초월 허용)",
+                    value=_has_peak, key=f"wb_use_peak_{_sel_wt}",
+                )
+                if _use_peak:
+                    _pc1, _pc2 = st.columns(2)
+                    with _pc1:
+                        _pv = _cc.get("fantasy_peak_level")
+                        _peak_lv = st.selectbox(
+                            "클라이맥스 수위", _higher,
+                            index=_higher.index(_pv) if _pv in _higher else len(_higher) - 1,
+                            format_func=lambda v: FANTASY_LEVELS[v]["label"],
+                            key=f"wb_peak_lv_{_sel_wt}",
+                        )
+                    with _pc2:
+                        _peak_from = st.number_input(
+                            "클라이맥스 시작 회차", 1, 300,
+                            int(_cc.get("fantasy_peak_from_ep") or 40),
+                            key=f"wb_peak_from_{_sel_wt}",
+                        )
+            else:
+                st.caption("이 세계 유형의 최고 수위입니다. 클라이맥스 구간 설정이 필요 없습니다.")
+
+            st.markdown("---")
+            _bible = dict(_cc.get("world_bible") or {})
+            _fields = WORLD_TYPES[_sel_wt]["bible_fields"]
+            for _k, _lb, _g in _fields:
+                _wkey = f"wb_f_{_sel_wt}_{_k}"
+                if _wkey not in st.session_state:
+                    st.session_state[_wkey] = str(_bible.get(_k) or "")
+
+            if st.button(
+                "📄 기획서에서 빈 칸 초안 채우기 (Sonnet · 빈 칸만)",
+                use_container_width=True,
+                disabled=not st.session_state.brief_text,
+                key="wb_draft_btn",
+            ):
+                with st.spinner("기획서에서 세계관 항목 추출 중..."):
+                    _raw = call_claude(
+                        build_world_bible_prompt(st.session_state.brief_text, _cc, _sel_wt),
+                        max_tokens=MAX_TOKENS_STRUCTURE,
+                    )
+                    _parsed = safe_json(_raw)
+                    if isinstance(_parsed, dict) and isinstance(_parsed.get("fields"), dict):
+                        _added = []
+                        for _k, _lb, _g in _fields:
+                            _v = _parsed["fields"].get(_k)
+                            _wkey = f"wb_f_{_sel_wt}_{_k}"
+                            if isinstance(_v, str) and _v.strip() and not st.session_state.get(_wkey, "").strip():
+                                st.session_state[_wkey] = _v.strip()
+                                _added.append(_lb)
+                        st.success(
+                            f"초안 {len(_added)}개 항목을 채웠습니다. 내용을 확인한 뒤 "
+                            f"아래 '세계관 바이블 저장'을 눌러야 반영됩니다."
+                        )
+                        st.rerun()
+                    else:
+                        st.error("초안 생성 실패 — 응답을 JSON으로 해석하지 못했습니다. 다시 시도해 주세요.")
+            if not st.session_state.brief_text:
+                st.caption("기획서가 업로드되지 않아 자동 초안은 쓸 수 없습니다. 직접 입력해 주세요.")
+
+            _filled_now = sum(1 for _k, _lb, _g in _fields
+                              if st.session_state.get(f"wb_f_{_sel_wt}_{_k}", "").strip())
+            st.markdown(f"**바이블 필드 {_filled_now}/{len(_fields)} 입력됨** · 빈 칸은 집필 시 '미정 — 새로 정하지 말 것'으로 전달됩니다.")
+            for _k, _lb, _g in _fields:
+                st.text_area(
+                    _lb,
+                    key=f"wb_f_{_sel_wt}_{_k}",
+                    height=90,
+                    placeholder=_g,
+                    help=_g,
+                )
+
+            if st.button("💾 세계관 바이블 저장", type="primary", use_container_width=True, key="wb_save_btn"):
+                _new = {_k: st.session_state.get(f"wb_f_{_sel_wt}_{_k}", "").strip() for _k, _lb, _g in _fields}
+                _merged = dict(_cc.get("world_bible") or {})
+                _merged.update(_new)   # 다른 세계 유형에서 입력한 필드는 보존
+                _cc["world_bible"] = _merged
+                _cc["world_type"] = _sel_wt
+                _cc["fantasy_level"] = int(_lv)
+                if _peak_lv is not None and _peak_from:
+                    _cc["fantasy_peak_level"] = int(_peak_lv)
+                    _cc["fantasy_peak_from_ep"] = int(_peak_from)
+                else:
+                    _cc.pop("fantasy_peak_level", None)
+                    _cc.pop("fantasy_peak_from_ep", None)
+                # 경지 체계는 기존 세계관·무공 대전 칸이 비어 있을 때만 옮겨 적는다
+                _ls = _new.get("level_system", "")
+                if _ls:
+                    _ws = _cc.get("world_setting")
+                    if isinstance(_ws, dict) and not str(_ws.get("martial_level_system") or "").strip():
+                        _ws["martial_level_system"] = _ls
+                    _mb = st.session_state.martial_bible
+                    if isinstance(_mb, dict) and not str(_mb.get("martial_level_system") or "").strip():
+                        _mb["martial_level_system"] = _ls
+                st.session_state.concept_card = _cc
+                st.success(
+                    f"✅ 저장 완료 — {WORLD_TYPES[_sel_wt]['label']} · 수위 {_lv} · "
+                    f"바이블 {sum(1 for v in _new.values() if v)}/{len(_fields)}"
+                )
+
+            with st.expander("집필 프롬프트에 전달되는 세계관·수위 블록 미리보기", expanded=False):
+                st.markdown(build_world_bible_block(_cc))
+                st.markdown(build_fantasy_level_block(_cc, 1))
 
         # ──── Core Arc ────
         with build_tab1:
@@ -2106,6 +2289,7 @@ with tab3:
                     current_ep,
                     ep_number=selected_ep,
                     martial_bible=st.session_state.martial_bible,
+                    concept_card=st.session_state.concept_card,   # v2.9.0 수위별 쿼터
                 )
                 _d_grade = density_scan.get("grade", "?")
                 _d_icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "🚨"}.get(_d_grade, "•")
@@ -2122,6 +2306,18 @@ with tab3:
                     st.markdown(
                         format_wuxia_density_report(density_scan, ep_number=selected_ep)
                     )
+
+                # ──── 세계 유형 · 판타지 수위 정합 (v2.9.0 — A33, 정적 검출) ────
+                world_scan = scan_world_consistency(
+                    current_ep, st.session_state.concept_card, ep_number=selected_ep,
+                )
+                w_label = (
+                    "🌐 세계 정합 — ✅ 통과"
+                    if world_scan["clean"]
+                    else "🌐 세계 정합 — ⚠️ " + " / ".join(world_scan["flags"])
+                )
+                with st.expander(w_label, expanded=not world_scan["clean"]):
+                    st.markdown(format_world_consistency_report(world_scan, ep_number=selected_ep))
 
                 # ──── 초식 일관성 검사 (v2.5.0 — 정적 검출, API 미사용) ────
                 martial_scan = scan_martial_consistency(
@@ -2225,6 +2421,7 @@ with tab3:
                                     current_ep,
                                     ep_number=selected_ep,
                                     martial_bible=st.session_state.martial_bible,
+                                    concept_card=st.session_state.concept_card,
                                 )
                                 redo_scan = scan_prose_style(current_ep, st.session_state.character_bible)
                                 redo_parts = []
@@ -2237,6 +2434,14 @@ with tab3:
                                 if not redo_scan["clean"]:
                                     redo_parts.append(
                                         format_prose_scan_report(redo_scan, ep_number=selected_ep)
+                                    )
+                                # v2.9.0: 세계 정합(A33) 검출 결과도 함께 주입
+                                redo_world = scan_world_consistency(
+                                    current_ep, st.session_state.concept_card, ep_number=selected_ep,
+                                )
+                                if not redo_world["clean"]:
+                                    redo_parts.append(
+                                        format_world_consistency_report(redo_world, ep_number=selected_ep)
                                     )
                                 # v2.5.0: 초식 일관성 검출 결과도 함께 주입
                                 redo_martial = scan_martial_consistency(

@@ -1,7 +1,11 @@
 """
-👖 BLUE JEANS WEB NOVEL ENGINE v2.0 — parser.py
-기획서 파일 파싱 모듈 (DOCX / HWP / PDF / TXT)
+👖 BLUE JEANS WUXIA ENGINE v2.8.1 — parser.py
+기획서 파일 파싱 모듈 (DOCX / HWP / PDF / TXT / MD)
 © 2026 BLUE JEANS PICTURES
+
+[변경 이력]
+v2.8.1 (2026-11-06) — 헤더 정정만. 이식 당시의 'WEB NOVEL ENGINE v2.0' 표기를
+  WUXIA ENGINE으로 바로잡았다. 파싱 코드 · 의존성(olefile·pypdf) 변경 없음
 """
 
 import io

@@ -1,10 +1,55 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.7.2 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.9.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.9.0 (2026-11-06) — 세계 유형 축 + 판타지 수위 다이얼 (World Type Pack)
+  · [사고 원인] 세계관 기본 설정이 WUXIA_CLASSIC_WORLDBUILDING(명·청대
+    중원) 하나뿐이었고, 공식과 상관없이 모든 작품의 Core Arc·본문 집필에
+    무조건 주입됐다. 현대 학원무협 아미고가 매 회차 "화폐 냥·시간 시진·
+    객잔 1박 50문"을 기본값으로 받고 있었다.
+  · [배선 구멍 — 원칙 L] WUXIA_ACADEMY_SYSTEM이 정의만 되고 어디서도
+    호출되지 않았다. 이번에 F4 작품에 자동 연결. 학제도 "4년생+연구생"
+    고정값에서 작품 설정 우선(현대 기본 고교 3년제)으로 정정
+  · [배선 구멍] 회차 플롯 프롬프트에는 세계관 블록이 아예 없었다. 추가
+  · WORLD_TYPES 신설 — 세계 유형 3종 (enum 키, 변형 금지)
+      현대_무림  — 현대 사회 위의 무림 (아미고)
+      중원_강호  — 가상 중원. F1 회귀·F3 시스템 등 판타지 무협의 무대
+      조선_역사  — 실존 조선. 역사 무예 + 판타지 한 가지
+    6공식 키는 변경 없음. 세계 유형은 공식과 독립된 축이다.
+  · FORMULA_DEFAULT_WORLD — 공식별 기본 세계 유형 (F4 → 현대_무림, 그 외 → 중원_강호)
+  · FANTASY_LEVELS 신설 — 판타지 수위 0~3
+      0 실전 무예 / 1 신체 한계 상향 / 2 기운의 가시화 / 3 초월
+    작품 기본 수위 + 클라이맥스 구간 수위(fantasy_peak_level·_from_ep)
+    조선_역사는 0~1로 상한 고정
+  · WUXIA_MODERN_WORLDBUILDING 신설 — 공존 규칙·공권력·화폐·시간·학제·
+    호칭 혼용·복식·무공 계보 재료화·미디어 9항목
+  · WUXIA_JOSEON_WORLDBUILDING 신설 — 고증 원칙 + 검색 확인된 제도 좌표만 수록
+    (오군영 설치 연도 · 『무예제보』→『무예신보』→『무예도보통지』 계보 · 24기)
+  · 세계관 바이블 — concept_card["world_bible"]. 세계 유형별 필드 7~10개.
+    빈 필드는 "미정 — 본문에서 새로 정하지 말 것"으로 주입 (원칙 M)
+  · build_world_type_block() — Core Arc·플롯·집필·재집필 4개 프롬프트의
+    세계관 주입을 이 함수로 통일
+  · build_world_bible_prompt() — 기획서 → 세계관 바이블 초안 (빈 칸만, 근거 없으면 pending)
+  · HISTORICAL_OPENING_DENSITY_SPEC + build_opening_density_spec() —
+    수위 0~1 작품은 A29 쿼터 대신 실전 무예 규격 (기예명·자세와 거리·
+    제도 좌표·시대 좌표·대가)
+  · A33 세계 유형·판타지 수위 정합 룰 신설 (시대착오·수위 초과·미정 설정 창작 금지)
+    AI_ANTI_PATTERN 헤더 범위 A1~A32 → A1~A33
+  · engine_validator.py 연동: scan_wuxia_density()가 세계 유형·수위별 쿼터 사용,
+    scan_world_consistency() 신설 (시대착오·수위 초과 검출, 원칙 K — 검출만)
+  · 하위 호환: world_type이 없는 기존 프로젝트는 공식 기본값으로 자동 해석.
+    F4가 아닌 기존 작품은 이전과 동일하게 중원 강호 블록 + 수위 2
+
+v2.8.1 (2026-11-06) — 원고 서식 재복구 (docx_builder v2.8.1 연동)
+  · 2026-07-27 v2.8.0(둥근 따옴표·함초롬바탕·여백 2.0cm)이 v2.7.2 커밋 과정에서
+    v2.7.1 베이스 위에 패치가 얹혀 소실된 것을 GitHub 최신 커밋 대조로 확인.
+    v2.7.2의 A32·구분선 정렬은 그대로 두고 v2.8.0 서식만 재적용했다.
+  · 이 파일은 버전 상수만 동기화. 프롬프트 · 룰 · 상수 정의 변경 없음.
+  · (v2.8.0은 GitHub에 배포된 적이 없어 이력에서 v2.8.1로 통합 기록)
+
 v2.7.2 (2026-07-28) — 문장 선두 기호 금지 (A32) + 구분선 정렬
   · [작가 원고 메모 반영] 아미고 EP002 DOCX에 삽입된 검토 메모 2건:
       ① "——그런데 몸이 생각보다 멀리 갔다." → "-- 삭제"
@@ -201,8 +246,8 @@ import json
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.7.2"
-ENGINE_BUILD_DATE = "2026-07-28"
+ENGINE_VERSION = "v2.9.0"
+ENGINE_BUILD_DATE = "2026-11-06"
 
 # ═══════════════════════════════════════════════════
 # SYSTEM PROMPT — 무협 웹소설 작가 페르소나
@@ -649,8 +694,10 @@ WUXIA_ACADEMY_SYSTEM = """
 - 사파 학원: 녹림·흑도 연합
 - 혼합 학원: 모든 계열 수용
 
-### 학년 체계
-1년생 → 2년생 → 3년생 → 4년생 → 연구생(졸업 후)
+### 학년 체계 (v2.9.0 정정 — 작품 설정 우선)
+- 작품의 세계관 바이블(학제·학원 제도)이 정한 학제를 그대로 따른다.
+- 현대 무림형 기본값: 고등 3년제 (1학년 → 2학년 → 3학년)
+- 중원 강호형 학원(가상 무관학교 등)은 작품이 정한 년생 체계를 쓴다
 
 ### 학원 내 계급
 - 특대생: 천재 혹은 명문 후손 (최상급)
@@ -683,6 +730,523 @@ WUXIA_ACADEMY_SYSTEM = """
 ✅ 수업·기숙·축제·사건 균형
 ✅ 라이벌의 독립 서사와 성장
 """
+
+
+# ═══════════════════════════════════════════════════
+# v2.9.0 — 세계 유형(WORLD TYPE) 축 + 판타지 수위 다이얼
+# ───────────────────────────────────────────────────
+# [사고 원인] 세계관 기본 설정이 WUXIA_CLASSIC_WORLDBUILDING(명·청대 중원)
+# 하나뿐이었고, 공식과 무관하게 모든 작품의 Arc·집필에 주입됐다.
+# 현대 학원무협 아미고도 매 회차 "화폐는 냥, 시간은 시진"을 기본값으로
+# 받았다. 학원 전용 블록(WUXIA_ACADEMY_SYSTEM)은 정의만 있고 어디서도
+# 쓰이지 않았다(배선 구멍 — 원칙 L).
+#
+# [설계] 6공식 키(F1~F6)는 그대로 둔다(코드 규칙 8). 세계 유형은 공식과
+# 독립된 축이다. 공식은 "어떤 이야기 문법인가", 세계 유형은 "어떤 세계
+# 위에서 벌어지는가"를 정한다. 판타지 수위(0~3)는 그 세계에서 무공이
+# 어디까지 초인적인가를 정한다. 세 값이 함께
+#   ① 집필에 주입되는 기본 설정 블록
+#   ② STEP 2 세계관 바이블 탭의 필드
+#   ③ 장르 밀도 검수(A29)의 쿼터 기준
+# 을 바꾼다.
+# ═══════════════════════════════════════════════════
+
+WUXIA_MODERN_WORLDBUILDING = """
+## 현대 무림 세계관 기본 체계 (세계 유형: 현대_무림)
+
+이 세계는 현대 사회다. 무림은 과거의 강호가 아니라 현대 제도 안에
+재편된 집단이다. 무공은 존재하지만 휴대폰·자동차·방송·법률도 존재한다.
+**두 질서가 한 장면 안에서 부딪힐 때** 이 장르의 재미가 생긴다.
+
+### 1. 공존 규칙 — 무공과 현대 사회 [최우선]
+- 무공을 어디서 써도 되는가: 학원·대회장 같은 허가 구역과 일반 공공장소의
+  차이를 작품이 정한다. 정해지지 않았다면 본문에서 새로 만들지 말 것.
+- 무공 사용이 일상 풍경인가, 숨겨진 능력인가 — 작품 설정을 그대로 따른다.
+- 일반인(비무림인)이 무공을 보는 시선: 경외·공포·무관심 중 작품이 정한 것.
+
+### 2. 공권력과 무림
+- 정부·경찰·교육 당국·감찰 기관이 무림을 어떻게 관리하는가.
+- 무림인의 범죄는 누가 수사하고 누가 처벌하는가.
+- 공권력 쪽 인물은 직함과 소속 기관을 정확히 쓴다. 기관명을 회차마다
+  바꾸지 않는다.
+
+### 3. 화폐·물가·경제
+- 화폐는 원(₩) 등 작품의 현대 화폐를 쓴다. **냥·문·관·전 사용 금지.**
+- 상금·학비·장학금·후원금 같은 숫자는 독자가 체감하는 현대 단위로 쓴다.
+
+### 4. 시간·기술
+- 시각은 시계 표기(오전 7시, 새벽 다섯 시)를 쓴다.
+  **자시·축시·일각·반시진·시진 표기 금지.**
+- 휴대폰·메신저·CCTV·차량·방송 중계가 사건에 개입할 수 있다.
+  "왜 휴대폰으로 연락하지 않았나"가 성립하는 구멍을 만들지 않는다.
+
+### 5. 학원 제도 (학원이 무대인 경우)
+- 학제·학년·담임·교과·시험·징계 절차는 현대 학교 제도를 바탕으로
+  작품 설정을 따른다.
+- 학원 간 서열·리그·대회 출전권 구조를 일관되게 유지한다.
+
+### 6. 호칭 체계 — 혼용 기준
+- 학교·사회 호칭: 선생님·교장·이사장·선배·후배·○○씨
+- 무림 호칭: 사부·사형·사매·장문인·대협
+- 어느 관계에서 어느 호칭을 쓰는지 작품 설정을 따르고, 한 인물이
+  같은 상대를 장면마다 다르게 부르지 않는다. 호칭이 바뀌면 관계가
+  바뀐 것이다 (예: "선생님"이 "사부님"으로 바뀌는 순간은 사건이다).
+
+### 7. 복식·공간
+- 교복·무복·정장·트레이닝복 등 현대 복식에 무림 요소가 얹힌다.
+  장포·관복·보복 같은 왕조 복식은 의식·전통 행사에서만.
+- 공간: 교실·도장·기숙사·매점·지하철·스타디움. 객잔·표국은
+  현대식으로 재해석된 경우에만 쓴다.
+
+### 8. 무공 계보 — 정통 무협 용어의 재료화
+- 구파일방·오대세가·경지 이름 등 정통 무협 용어는 작품이 가져다
+  비틀어 쓰는 재료다. 작품이 바꾼 표기(華山→花山 등)를 그대로 쓴다.
+- 경지·등급 체계는 작품이 정한 것만 쓴다. 정통 8경지를 자동 적용하지
+  않는다 (학생 등급·대회 판정 체계와 연결된 경우가 많다).
+
+### 9. 미디어·대중
+- 대회 중계·기사·SNS·학부모·후원사 등 대중의 시선이 압력으로 작동한다.
+
+### BAD 패턴
+❌ 현대 배경인데 냥·시진·객잔 1박 같은 왕조 표기가 섞이는 것
+❌ 휴대폰이 있는 세계에서 연락 두절로 성립하는 갈등
+❌ 공권력이 존재하는데 무림 사건에 아무 반응이 없는 것
+❌ 학원 내부만 존재하고 학원 밖 사회가 보이지 않는 것
+
+### GOOD 패턴
+✅ 경공으로 담을 넘는 장면 옆에 지각 벌점 규정이 있다
+✅ 상금이 원 단위로 정확하고, 그 돈의 쓰임이 인물의 동기와 묶인다
+✅ 정부 기관의 직함·문양·절차가 매번 같은 이름으로 등장한다
+"""
+
+
+WUXIA_JOSEON_WORLDBUILDING = """
+## 조선 역사 무예 세계관 기본 체계 (세계 유형: 조선_역사)
+
+이 세계는 실존한 조선이다. 독자가 돈을 내는 지점은 **기록된 역사의 빈칸에서
+실존 인물과 가상 인물이 움직이는 순간**이다. 무공의 화려함이 아니라 칼의
+무게·거리·호흡·부상, 그리고 그 칼이 휘말린 정치가 재미다.
+
+### 1. 고증 원칙 [최우선]
+- 실존 인물·실존 사건·실존 제도는 **세계관 바이블에 적힌 사실만** 쓴다.
+  바이블에 없는 연도·관직·친족 관계를 만들어 내지 않는다.
+- 허구는 세계관 바이블의 "허구 허용 범위"에 적힌 빈칸에만 넣는다.
+- 기록과 충돌하는 문장을 쓰지 않는다. 실존 인물의 생몰·관직·주요 행적을
+  뒤집는 전개는 작가가 바이블에 명시한 경우에만 허용한다.
+- 중원 무협 용어(구파일방·마교·무림맹·강호 백대고수)를 조선 세계에
+  끌어오지 않는다. 바이블에 명시된 경우만 예외.
+
+### 2. 확인된 제도 좌표 (검색 확인된 사실만 수록)
+- 오군영 설치 연도 — 훈련도감 1593(선조) / 어영청 1623(인조) /
+  총융청 1624(인조) / 수어청 1626(인조) / 금위영 1682(숙종)
+  · 훈련도감·어영청·금위영은 궁궐과 도성 방어를 맡은 삼군문
+  · 총융청은 경기 일대, 수어청은 남한산성 중심 경기 남부 방어
+- 무예서 계보 — 『무예제보』(1594, 선조) 6기 → 『무예신보』(영조) 18기 →
+  『무예도보통지』(1790, 정조 14 · 이덕무·박제가·백동수 편찬) 24기
+- 『무예도보통지』 24기: 장창 · 죽장창 · 기창(旗槍) · 당파 · 기창(騎槍) ·
+  낭선 · 쌍수도 · 예도 · 왜검 · 제독검 · 본국검 · 쌍검 · 마상쌍검 · 월도 ·
+  마상월도 · 협도 · 등패 · 권법 · 곤봉 · 편곤 · 마상편곤 · 격구 · 마상재
+  (등패는 요도·표창과 함께 운용되는 기예)
+- 작품 시대가 1790년 이전이면 『무예도보통지』는 존재하지 않는다.
+  작품 연도와 문헌 성립 연도를 반드시 대조한다.
+- 위 목록 밖의 제도·관직·연대는 세계관 바이블의 "사료 근거" 필드에
+  출처와 함께 적힌 것만 쓴다.
+
+### 3. 무예 묘사 문법 (판타지 수위 0~1 기준)
+- 기술 이름보다 **자세·거리·칼의 무게·호흡·발**을 먼저 쓴다.
+- 실전 무예에는 대가가 있다. 베이면 피가 나고, 지치면 칼끝이 떨어진다.
+- 무예 명칭은 실존 기예명(본국검·쌍수도·월도 등)을 우선 쓰고, 작품이
+  만든 가상 검법은 바이블에 등록된 것만 쓴다.
+- 경지 서열(삼류~생사경)을 쓰지 않는다. 실력은 관직·전적·소문·
+  상대의 반응으로 드러낸다.
+
+### 4. 신분·호칭·언어
+- 신분 질서(양반·중인·상민·천민)와 관직 호칭은 바이블 설정을 따른다.
+- 왕·세자·대군·군 호칭, 관원 간 호칭을 장면마다 바꾸지 않는다.
+- 대사는 현대 독자가 읽히는 수준의 사극체. 고어를 과잉 재현하지 않는다.
+
+### 5. 시간·화폐·생활
+- 시각·화폐·도량형은 바이블에 적힌 표기만 쓴다. 중원 무협의
+  "냥·객잔 1박 50문" 물가표를 가져오지 않는다.
+
+### BAD 패턴
+❌ 한복 입은 중원 무협 — 장풍·검기가 날고 마교가 등장하는 조선
+❌ 실존 인물의 기록을 무시한 관직·연대
+❌ 작품 연도보다 늦게 성립한 문헌·제도의 등장
+❌ 이름 붙은 초식을 매 회 새로 지어내는 것
+
+### GOOD 패턴
+✅ 기록 한 줄(임명 시도·호위 기록 등)을 출발점으로 그 뒤의 하룻밤을 상상한다
+✅ 칼 한 번의 교환에 거리·발·호흡이 다 보인다
+✅ 궁중 정치의 결정이 검객 한 사람의 몸으로 떨어진다
+"""
+
+
+# 세계 유형 정의 — 키는 enum. 변형 금지 (코드 규칙 8과 같은 원칙)
+WORLD_TYPES = {
+    "현대_무림": {
+        "label": "현대 무림형",
+        "description": "현대 사회 위에 무림이 재편된 세계. 학원·도시·직장 무협.",
+        "base_block": "WUXIA_MODERN_WORLDBUILDING",
+        "default_fantasy_level": 2,
+        "allowed_fantasy_levels": [1, 2, 3],
+        "examples": "아미고(학원), 도시 무협",
+        "bible_fields": [
+            ("coexistence_rules", "무공과 현대 사회의 공존 규칙",
+             "어디서 무공을 써도 되는가, 공공장소 사용 규제, 일반인의 시선"),
+            ("authority", "공권력과 무림",
+             "정부·경찰·교육 당국·감찰 기관의 이름·직함·권한, 무림 범죄의 처리"),
+            ("school_system", "학제·학원 제도",
+             "학년·학제(예: 고교 3년제), 교사 체계, 징계·정학 절차"),
+            ("school_league", "학원 간 서열·리그",
+             "학교 순위, 우승 이력, 출전권 배분 구조"),
+            ("economy", "화폐·물가",
+             "화폐 단위, 상금·학비 등 작품에 나오는 금액의 체감 규모"),
+            ("tech_media", "기술·미디어",
+             "휴대폰·CCTV·차량·방송 중계·SNS가 무림 사건에 끼치는 영향"),
+            ("honorifics", "호칭 혼용 기준",
+             "선생님/사부, 선배/사형을 어떤 관계에서 쓰는가"),
+            ("level_system", "경지·등급 체계",
+             "학생 등급·대회 판정과 연결된 무공 실력 눈금. 정통 8경지를 쓸지 여부"),
+            ("history_timeline", "무림 연표",
+             "문파 전쟁·학원 부활 등 과거 사건의 선후, 인물별 활동 시기"),
+            ("competition_status", "대회의 사회적 위상",
+             "중계 여부, 우승자가 사회에서 받는 대우, 정치와의 관계"),
+        ],
+    },
+    "중원_강호": {
+        "label": "중원 강호형",
+        "description": "가상의 명·청대 중원. 회귀·시스템 등 판타지 무협의 기본 무대.",
+        "base_block": "WUXIA_CLASSIC_WORLDBUILDING",
+        "default_fantasy_level": 2,
+        "allowed_fantasy_levels": [1, 2, 3],
+        "examples": "F1 회귀 먼치킨, F3 시스템 무협",
+        "bible_fields": [
+            ("era", "시대",
+             "가상 왕조 혹은 실제 왕조, 연호"),
+            ("current_situation", "현재 강호 정세",
+             "정·사·마의 현재 긴장 상태(휴전 몇 년째, 대전 직전 등)"),
+            ("jianghu_rules", "강호 규칙",
+             "비무첩·은원 처리·강호도의·관부 불개입 원칙 등 이 작품이 쓰는 규칙"),
+            ("factions_map", "세력 지도",
+             "구파일방·세가·사파·마교 중 이 작품에 실제 등장하는 세력과 위치"),
+            ("level_system", "경지 체계",
+             "정통 8경지를 그대로 쓸지, 작품 고유 체계를 쓸지"),
+            ("economy", "화폐·물가",
+             "냥·문 환산, 작품에 나오는 주요 물가"),
+            ("authority", "관부·황실",
+             "관부와 무림의 관계, 등장하는 관직"),
+        ],
+    },
+    "조선_역사": {
+        "label": "조선 역사형",
+        "description": "실존 조선. 역사 무예 + 판타지 한 가지. 고증 의무가 있다.",
+        "base_block": "WUXIA_JOSEON_WORLDBUILDING",
+        "default_fantasy_level": 1,
+        "allowed_fantasy_levels": [0, 1],
+        "examples": "실존 검객 팩션",
+        "bible_fields": [
+            ("era_range", "시대 범위",
+             "왕대와 연도 범위 (예: 숙종 ~ 영조 즉위 전후)"),
+            ("historical_events", "실존 사건 연표",
+             "작품이 다루는 실존 사건과 연도. 출처 함께"),
+            ("real_figures", "실존 인물 대장",
+             "실존 인물 이름·기록된 사실(관직·연대·관계)·출처"),
+            ("fiction_zone", "허구 허용 범위",
+             "기록의 어느 빈칸에 허구를 넣는가. 뒤집지 않을 기록"),
+            ("sources", "사료 근거",
+             "작품이 기대는 문헌(실록·승정원일기·무예서 등)과 활용 방식"),
+            ("institutions", "제도·군영·관직",
+             "등장하는 군영·관청·관직과 그 역할"),
+            ("fantasy_element", "판타지 요소 (한 가지)",
+             "이 작품에 허용하는 단 하나의 판타지 장치와 그 규칙"),
+            ("status_language", "신분·호칭·언어",
+             "신분 질서, 관직 호칭, 대사 사극체 수준"),
+            ("time_money", "시각·화폐 표기",
+             "본문에 쓸 시각·화폐·도량형 표기"),
+        ],
+    },
+}
+
+WORLD_TYPE_KEYS = list(WORLD_TYPES.keys())
+
+# 공식별 기본 세계 유형 — 작가가 세계관 바이블 탭에서 바꿀 수 있다
+FORMULA_DEFAULT_WORLD = {
+    "F1_회귀_먼치킨_문파재건": "중원_강호",
+    "F2_이세계_전생_무협": "중원_강호",
+    "F3_시스템_게임_무협": "중원_강호",
+    "F4_학원_무협": "현대_무림",
+    "F5_여성향_로맨스_무협": "중원_강호",
+    "F6_정통_강호_서사": "중원_강호",
+}
+
+# 판타지 수위 다이얼 — 0~3
+FANTASY_LEVELS = {
+    0: {
+        "label": "0 · 실전 무예",
+        "allowed": "사람의 신체 한계 안의 기술. 거리·칼의 무게·체력·부상이 현실대로 작동.",
+        "forbidden_terms": ["장풍", "검기", "검강", "검환", "이기어검", "허공답보",
+                            "축지법", "호체신공", "내공을 쏘", "기운이 뻗", "경공술"],
+        "note": "내공·경공·기의 가시화를 쓰지 않는다. 실력은 전적·소문·상대의 반응으로.",
+    },
+    1: {
+        "label": "1 · 신체 한계 상향",
+        "allowed": "내공·운기는 몸 안에서만 작동한다 — 힘·속도·회복·감각이 사람보다 한 단계 위.",
+        "forbidden_terms": ["장풍", "검기", "검강", "검환", "이기어검", "허공답보",
+                            "축지법", "결계"],
+        "note": "기운이 몸 밖으로 나가 보이는 장면을 쓰지 않는다. 지붕을 뛰어넘는 정도는 허용.",
+    },
+    2: {
+        "label": "2 · 기운의 가시화",
+        "allowed": "장풍·검기·경공·축지법 허용. 무공이 눈에 보이는 형태로 드러난다.",
+        "forbidden_terms": ["불사의 몸", "시간을 되돌", "결계가 펼쳐", "봉인이 풀"],
+        "note": "초월(불사·시공 조작·결계·신병 각성)은 수위 3 구간에서만.",
+    },
+    3: {
+        "label": "3 · 초월",
+        "allowed": "불사·봉인된 신병·결계·초월 경지 허용.",
+        "forbidden_terms": [],
+        "note": "초월 장면은 회차당 1구역에 집중한다. 남발하면 무게가 사라진다.",
+    },
+}
+
+
+def _concept_as_dict(concept_card):
+    """concept_card가 dict·JSON 문자열 어느 쪽으로 와도 dict로 통일."""
+    if isinstance(concept_card, dict):
+        return concept_card
+    if isinstance(concept_card, str) and concept_card.strip().startswith("{"):
+        try:
+            import json as _json
+            d = _json.loads(concept_card)
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def resolve_world_type(concept_card):
+    """작품의 세계 유형 키 — enum 강제.
+
+    우선순위: concept_card["world_type"](유효 키일 때) → 공식 기본값 → 중원_강호
+    """
+    cc = _concept_as_dict(concept_card)
+    wt = str(cc.get("world_type") or "").strip()
+    if wt in WORLD_TYPES:
+        return wt
+    fk = str(cc.get("formula_key") or cc.get("wuxia_formula_main") or "").strip()
+    if fk in FORMULA_DEFAULT_WORLD:
+        return FORMULA_DEFAULT_WORLD[fk]
+    return "중원_강호"
+
+
+def resolve_fantasy_level(concept_card, ep_number=0):
+    """회차의 판타지 수위 (0~3) — 세계 유형 허용 범위로 클램프.
+
+    concept_card 필드:
+      fantasy_level        기본 수위 (없으면 세계 유형 기본값)
+      fantasy_peak_level   클라이맥스 구간 수위 (선택)
+      fantasy_peak_from_ep 클라이맥스 구간 시작 회차 (선택)
+    """
+    cc = _concept_as_dict(concept_card)
+    wt = resolve_world_type(cc)
+    spec = WORLD_TYPES[wt]
+    allowed = spec["allowed_fantasy_levels"]
+
+    def _clamp(v, fallback):
+        try:
+            v = int(v)
+        except (TypeError, ValueError):
+            return fallback
+        if v in allowed:
+            return v
+        return max(allowed) if v > max(allowed) else min(allowed)
+
+    base = _clamp(cc.get("fantasy_level"), spec["default_fantasy_level"])
+    peak = cc.get("fantasy_peak_level")
+    from_ep = cc.get("fantasy_peak_from_ep")
+    try:
+        ep = int(ep_number or 0)
+        from_ep = int(from_ep) if from_ep not in (None, "") else 0
+    except (TypeError, ValueError):
+        ep, from_ep = 0, 0
+    if peak not in (None, "") and from_ep > 0 and ep >= from_ep:
+        return max(base, _clamp(peak, base))
+    return base
+
+
+def build_fantasy_level_block(concept_card, ep_number=0):
+    """판타지 수위 블록 — 이번 회차에서 무공이 어디까지 초인적인가."""
+    cc = _concept_as_dict(concept_card)
+    lv = resolve_fantasy_level(cc, ep_number)
+    spec = FANTASY_LEVELS[lv]
+    lines = [f"## 판타지 수위 — {spec['label']} (A33)"]
+    if ep_number:
+        lines[0] += f" · EP{ep_number}"
+    lines.append(f"- 허용: {spec['allowed']}")
+    if spec["forbidden_terms"]:
+        lines.append("- 이번 회차 사용 금지 표현: " + " · ".join(spec["forbidden_terms"]))
+    lines.append(f"- 원칙: {spec['note']}")
+    peak = cc.get("fantasy_peak_level")
+    from_ep = cc.get("fantasy_peak_from_ep")
+    if peak not in (None, "") and from_ep not in (None, "", 0):
+        lines.append(f"- 작품 설계: EP{from_ep}부터 수위 {peak} 구간. 그 전에 앞당겨 쓰지 말 것.")
+    return "\n".join(lines)
+
+
+def build_world_bible_block(concept_card):
+    """작가가 확정한 세계관 바이블 필드만 주입. 빈 필드는 '미정'으로 표시.
+
+    원칙 M: 빈 필드를 LLM이 채우게 두면 매번 다른 설정을 지어낸다.
+    그래서 미정 항목은 '본문에서 새로 정하지 말 것'으로 명시한다.
+    """
+    cc = _concept_as_dict(concept_card)
+    wt = resolve_world_type(cc)
+    bible = cc.get("world_bible") if isinstance(cc.get("world_bible"), dict) else {}
+    fields = WORLD_TYPES[wt]["bible_fields"]
+    filled, pending = [], []
+    for key, label, _guide in fields:
+        val = bible.get(key)
+        if isinstance(val, str) and val.strip():
+            filled.append(f"- **{label}**: {val.strip()}")
+        else:
+            pending.append(label)
+    if not filled and not pending:
+        return ""
+    lines = [f"## 🌐 세계관 바이블 — {WORLD_TYPES[wt]['label']} (작가 확정 · 임의 변경 금지)"]
+    lines.extend(filled if filled else ["- (작가 확정 항목 없음)"])
+    if pending:
+        lines.append("")
+        lines.append("### 미정 항목 — 본문에서 새로 정하지 말 것")
+        lines.append("아래 항목은 작가가 아직 정하지 않았다. 이번 회차에서 이 항목에 관한")
+        lines.append("새 규칙·새 기관·새 수치를 만들어 내지 않는다. 필요하면 언급을 피한다.")
+        lines.append("- " + " / ".join(pending))
+    return "\n".join(lines)
+
+
+def build_world_type_block(concept_card, ep_number=0):
+    """세계 유형 기본 설정 + 학원 서브시스템 + 세계관 바이블 + 판타지 수위.
+
+    v2.9.0: Arc·플롯·집필·재집필 프롬프트의 WUXIA_CLASSIC_WORLDBUILDING
+    무조건 주입을 이 함수로 교체한다.
+    """
+    cc = _concept_as_dict(concept_card)
+    wt = resolve_world_type(cc)
+    base = globals().get(WORLD_TYPES[wt]["base_block"], "")
+    parts = [f"# 세계 유형: {WORLD_TYPES[wt]['label']} ({wt})", base]
+    fk = str(cc.get("formula_key") or "").strip()
+    if fk == "F4_학원_무협":
+        parts.append(WUXIA_ACADEMY_SYSTEM)
+    bible_block = build_world_bible_block(cc)
+    if bible_block:
+        parts.append(bible_block)
+    parts.append(build_fantasy_level_block(cc, ep_number))
+    return "\n\n".join(p for p in parts if p)
+
+
+# 판타지 수위 0~1 작품의 EP1~EP4 장르 계약 — 실전 무예 신호
+HISTORICAL_OPENING_DENSITY_SPEC = """[EP1~EP4 장르 밀도 규격 — 실전 무예 (판타지 수위 0~1)]
+
+## 이 규격이 존재하는 이유
+수위 0~1 작품의 독자는 1~4화에서 "칼이 진짜로 무겁다"를 판정한다.
+이름 붙은 초식을 쏟아내는 중원 무협 쿼터를 적용하면 매 회 가짜 초식이
+지어져 장르가 무너진다. 이 규격은 A29 쿼터표를 대체한다.
+
+## 이번 회차에 반드시 채울 쿼터
+□ 실존 기예명 또는 바이블 등록 무예명 **2회 이상** (본국검·쌍수도·월도 등)
+□ 자세·거리·발·호흡이 보이는 무예 교환 **1장면 이상**
+□ 제도 좌표 — 군영·관청·관직 이름 **2회 이상**
+□ 시대 좌표 — 왕대·연도·실존 사건 **1회 이상**
+□ 대가 — 부상·피로·무기 손상 등 몸의 현실 **1회 이상**
+
+## 절대 하지 말 것
+✗ 기운이 몸 밖으로 뻗는 묘사 (수위 1 이하)
+✗ 바이블에 없는 초식명을 새로 짓기
+✗ 경지 서열(삼류~생사경)로 실력 표시
+✗ 바이블에 없는 실존 인물의 관직·연대를 만들어 내기
+"""
+
+
+def build_opening_density_spec(concept_card, ep_number):
+    """EP1~EP4 밀도 규격 선택 — 수위 2 이상은 기존 A29 규격, 0~1은 실전 무예 규격."""
+    try:
+        ep = int(ep_number or 0)
+    except (TypeError, ValueError):
+        ep = 0
+    if ep not in (1, 2, 3, 4):
+        return ""
+    if resolve_fantasy_level(concept_card, ep) <= 1:
+        return HISTORICAL_OPENING_DENSITY_SPEC
+    return WUXIA_OPENING_DENSITY_SPEC
+
+
+def build_density_override_block(concept_card, ep_number=0):
+    """수위 0~1 작품에서 A29 쿼터표를 무효화하는 지시. 수위 2 이상은 빈 문자열."""
+    if resolve_fantasy_level(concept_card, ep_number) >= 2:
+        return ""
+    return (
+        "## A29 쿼터표 적용 제외 (판타지 수위 0~1)\n"
+        "이 작품은 실전 무예 수위다. AI 문체 규칙의 A29 정량 쿼터표"
+        "(무공 명명 5종·한자 병기 8~15회·경지 노출 등)는 적용하지 않는다.\n"
+        "대신 HISTORICAL 밀도 규격(기예명·자세와 거리·제도 좌표·시대 좌표·대가)을 따른다.\n"
+        "A30 3박자는 '명명 → 시연 → 해설'에서 해설을 원리 대신 "
+        "'그 기예를 어디서 누구에게 배웠는가'로 바꿔 적용한다."
+    )
+
+
+def build_world_bible_prompt(brief_text, concept_card, world_type=None):
+    """기획서 → 세계관 바이블 초안 (v2.9.0). 빈 칸만 채우는 용도.
+
+    원칙 M: 기획서에 없는 내용은 지어내지 않고 pending으로 돌린다.
+    출력 키는 세계 유형의 bible_fields 키와 1:1.
+    """
+    cc = _concept_as_dict(concept_card)
+    wt = world_type if world_type in WORLD_TYPES else resolve_world_type(cc)
+    fields = WORLD_TYPES[wt]["bible_fields"]
+    field_lines = "\n".join(f"- {k}: {label} — {guide}" for k, label, guide in fields)
+    keys_json = ",\n".join(f'    "{k}": ""' for k, _l, _g in fields)
+    brief = (brief_text or "")[:MAX_WORLD_BIBLE_BRIEF_CHARS]
+    try:
+        import json as _json
+        cc_txt = _json.dumps({
+            k: cc.get(k) for k in ("title", "logline", "genre", "formula_key",
+                                   "world_setting", "setting", "competition_rules")
+            if cc.get(k)
+        }, ensure_ascii=False)[:6000]
+    except Exception:
+        cc_txt = ""
+
+    return f"""다음 기획서와 컨셉 카드에서 **세계관 바이블** 항목을 추출하세요.
+세계 유형: {WORLD_TYPES[wt]['label']} ({wt})
+
+## 추출 항목 (키: 의미 — 담을 내용)
+{field_lines}
+
+## 컨셉 카드 (요약)
+{cc_txt}
+
+## 기획서
+{brief}
+
+## 출력 형식 — 아래 JSON 객체만 출력
+{{
+  "fields": {{
+{keys_json}
+  }},
+  "pending": []
+}}
+
+## 규칙
+- 기획서·컨셉 카드에 **근거가 있는 내용만** 채운다. 근거가 없으면 "" 로 두고
+  그 키 이름을 pending 배열에 넣는다.
+- 그럴듯한 설정을 새로 지어내지 않는다. 비워 두는 것이 정답이다.
+- 고유명사는 기획서 철자 그대로 (한자 병기 포함).
+- 각 값은 2~4문장. 마크다운·주석·가이드 문구를 값에 넣지 않는다.
+- pending에는 키 이름만 넣는다 (예: ["authority", "economy"]).
+- JSON 외 텍스트 금지. 코드 블록 금지."""
+
+
+MAX_WORLD_BIBLE_BRIEF_CHARS = 12000
 
 
 # ═══════════════════════════════════════════════════
@@ -2892,7 +3456,7 @@ RATING_CONVERSION_RULES = """[19금 → 15금 변환 규칙 — 무협 특화]
 #         A15 재정의 / A23·A25 예외 조항 / A27 도입 구간 조항
 # ═══════════════════════════════════════════════════
 
-AI_ANTI_PATTERN = """[AI 문체 탈출 규칙 — 무협 A1~A32]
+AI_ANTI_PATTERN = """[AI 문체 탈출 규칙 — 무협 A1~A33]
 
 ※ A29~A31(장르 밀도)은 최우선 룰이다. 다른 절제 룰과 충돌하면
    A29~A31을 따른다. 절제는 장르 신호를 줄이는 근거가 아니다.
@@ -3234,6 +3798,26 @@ A32. 문장 선두 기호 금지 — 말줄임표·대시 (매 회차 / 절대 �
   ### 장면 구분선
   - 장면 전환에는 *** 한 줄만 쓴다. 다른 기호를 섞지 않는다.
     (DOCX 출력 시 자동으로 가운데 정렬된다)
+
+A33. 세계 유형 · 판타지 수위 정합 (매 회차 / 절대 규칙) — v2.9.0 신규
+  작품마다 세계 유형(현대_무림 / 중원_강호 / 조선_역사)과 판타지
+  수위(0~3)가 정해져 있다. 둘 다 프롬프트의 "세계 유형" 블록에 있다.
+
+  ### 금지 1 — 시대착오
+  - 현대 무림: 냥·문·전·관 화폐, 자시·축시·일각·시진 표기, 왕조 관직 금지
+  - 조선 역사: 구파일방·마교·무림맹 같은 중원 무협 세력, 작품 연도보다
+    늦게 성립한 문헌·제도, 바이블에 없는 실존 인물의 관직·연대 금지
+  - 중원 강호: 휴대폰·자동차·현대 화폐 등 현대 문물 금지
+    (이세계·시스템 장치로 작품이 명시한 경우만 예외)
+
+  ### 금지 2 — 수위 초과
+  - 판타지 수위 블록의 '사용 금지 표현'을 쓰지 않는다.
+  - 클라이맥스 구간(수위 상향 회차) 전에 상위 수위 장면을 앞당기지 않는다.
+    초월이 일찍 나오면 클라이맥스의 무게가 사라진다.
+
+  ### 금지 3 — 미정 설정 창작
+  - 세계관 바이블의 '미정 항목'에 해당하는 새 기관·새 규칙·새 수치를
+    본문에서 만들어 내지 않는다. 필요하면 그 대목을 피해 간다.
 """
 
 
@@ -3974,7 +4558,9 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
 ## 컨셉 카드
 {concept_card}
 
-{WUXIA_CLASSIC_WORLDBUILDING}
+{build_world_type_block(concept_card, 0)}
+
+{build_density_override_block(concept_card, 0)}
 
 {formula_block}
 
@@ -4189,7 +4775,11 @@ def build_episode_plot_prompt(arc_block, plant_map, ep_number,
 
 {EP1_OPENING_SPEC if ep_number in (1, 2) else ""}
 
-{WUXIA_OPENING_DENSITY_SPEC if ep_number in (1, 2, 3, 4) else ""}
+{build_world_type_block(concept_card, ep_number)}
+
+{build_opening_density_spec(concept_card, ep_number)}
+
+{build_density_override_block(concept_card, ep_number)}
 
 {_youth_plot_directive(concept_card)}
 
@@ -4273,7 +4863,7 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
 ## 직업 디테일 (자동 주입)
 {profession_blocks}
 
-{WUXIA_CLASSIC_WORLDBUILDING}
+{build_world_type_block(concept_card, ep_number)}
 
 {world_block}
 
@@ -4304,7 +4894,9 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
 
 {EP1_OPENING_SPEC if ep_number in (1, 2) else ""}
 
-{WUXIA_OPENING_DENSITY_SPEC if ep_number in (1, 2, 3, 4) else ""}
+{build_opening_density_spec(concept_card, ep_number)}
+
+{build_density_override_block(concept_card, ep_number)}
 
 {_rating_block(rating)}
 
@@ -5598,7 +6190,11 @@ def build_episode_redo_prompt(
 
 {build_martial_registry_block(_parse_characters_arg(character_bible_str), episode_plots, ep_number, martial_bible=martial_bible)}
 
-{WUXIA_OPENING_DENSITY_SPEC if ep_number in (1, 2, 3, 4) else ""}
+{build_world_type_block(concept_dict, ep_number)}
+
+{build_opening_density_spec(concept_dict, ep_number)}
+
+{build_density_override_block(concept_dict, ep_number)}
 
 ## 재집필 지침
 1. **회차의 핵심 사건은 유지**하되, 약점을 보완해 재집필
