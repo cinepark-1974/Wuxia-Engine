@@ -1,9 +1,15 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.12.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.1 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.1 (2026-11-07) — 집필 플랫폼 기본값 문피아
+  · [작가 요청] "문피아를 디폴트로 하고 네이버를 선택으로."
+  · STEP 3 플랫폼 선택: 문피아(5,000~6,000자)가 항상 기본. 네이버웹소설 등은 선택.
+    이전에는 컨셉 카드의 target_platform(아미고는 네이버웹소설)이 기본값을 바꿔
+    분량 기준이 4,000~5,000자로 잡혔다. 선택 항목에 분량 범위를 함께 표시하고,
+    컨셉 카드 타깃과 다르면 안내 문구를 띄운다
 v2.12.0 (2026-11-07) — 최고의 무협 기준표 (객관 판정) · 작가 원고 = 기준점
   · [작가 요청] "채점의 기준은 객관적이야. 부족한 요소. 기준미달." /
     "회별로 끊어서 간다. 버튼은 내가 누른다." — 자동 연속 집필은 만들지 않는다
@@ -2617,13 +2623,19 @@ with tab3:
                 ),
             )
 
+            # v2.12.1: 문피아 기본값 고정, 네이버 등은 선택. 컨셉 카드 타깃이 기본값을 바꾸지 않는다
+            _plat_opts = ["문피아"] + [k for k in PLATFORM_LENGTH if k != "문피아"]
             platform = st.selectbox(
-                "플랫폼",
-                list(PLATFORM_LENGTH.keys()),
-                index=list(PLATFORM_LENGTH.keys()).index(
-                    st.session_state.concept_card.get("target_platform", "문피아")
-                ) if st.session_state.concept_card.get("target_platform") in PLATFORM_LENGTH else 0,
+                "플랫폼 (분량 기준)",
+                _plat_opts,
+                index=0,
+                key="write_platform",
+                format_func=lambda k: (f"{k} — {PLATFORM_LENGTH[k]['min']:,}~{PLATFORM_LENGTH[k]['max']:,}자"
+                                       + (" (기본)" if k == "문피아" else "")),
             )
+            _cc_plat = str(st.session_state.concept_card.get("target_platform") or "")
+            if _cc_plat and _cc_plat != platform:
+                st.caption(f"컨셉 카드 타깃 플랫폼은 {_cc_plat}입니다. 분량 기준과 기준표 L1은 위에서 고른 플랫폼을 따릅니다.")
             rating = st.radio(
                 "등급",
                 ["15금", "19금"],
