@@ -1,9 +1,12 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.8.1 — parser.py
+👖 BLUE JEANS WUXIA ENGINE v2.11.0 — parser.py
 기획서 파일 파싱 모듈 (DOCX / HWP / PDF / TXT / MD)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.11.0 (2026-11-07) — DOCX를 문서 순서대로 읽기 (단락·표 섞인 순서 보존).
+  이전에는 표를 문서 끝에 몰아 붙여 표로 된 섹션 제목이 모두 끝으로 밀렸다.
+  아미고 v1.0 기획서에서 실측: '개요 | INFORMATION' 등 7개 제목이 맨 뒤에 위치.
 v2.8.1 (2026-11-06) — 헤더 정정만. 이식 당시의 'WEB NOVEL ENGINE v2.0' 표기를
   WUXIA ENGINE으로 바로잡았다. 파싱 코드 · 의존성(olefile·pypdf) 변경 없음
 """
@@ -17,16 +20,28 @@ def parse_docx(file_bytes):
     try:
         from docx import Document
         doc = Document(io.BytesIO(file_bytes))
+        # v2.11.0: 문서에 나온 순서대로 단락과 표를 읽는다.
+        #   이전에는 단락을 모두 읽은 뒤 표를 맨 끝에 붙였다. 섹션 제목을 표로
+        #   만드는 블루진 기획서 양식에서는 '개요 | INFORMATION' 같은 제목이
+        #   전부 문서 끝으로 밀려나 섹션 인식이 통째로 실패했다.
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
         parts = []
-        for para in doc.paragraphs:
-            if para.text.strip():
-                parts.append(para.text)
-        # 테이블
-        for table in doc.tables:
-            for row in table.rows:
-                row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
-                if row_text:
-                    parts.append(row_text)
+        for child in doc.element.body.iterchildren():
+            tag = child.tag.rsplit("}", 1)[-1]
+            if tag == "p":
+                t = Paragraph(child, doc).text
+                if t.strip():
+                    parts.append(t)
+            elif tag == "tbl":
+                for row in Table(child, doc).rows:
+                    cells = []
+                    for cell in row.cells:
+                        ct = cell.text.strip()
+                        if ct and (not cells or cells[-1] != ct):   # 병합 셀 중복 제거
+                            cells.append(ct)
+                    if cells:
+                        parts.append(" | ".join(cells))
         return "\n".join(parts)
     except Exception as e:
         return f"[DOCX 파싱 실패: {e}]"

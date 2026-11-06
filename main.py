@@ -1,9 +1,24 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.10.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.11.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.11.0 (2026-11-07) — Strength Picker (정본 기획서 하나 → 진단 → 채택)
+  · [작가 요청] "파일 하나로 작성하고, 엔진은 그 파일을 파악해서 장점만 당겨오게.
+    지금 기획서가 100점 만점이 아니잖아." v2.10.0의 통합 시작은 입력 칸이
+    세 개(기획서·메모·원고)에 체크박스 다섯 개라 복잡했고, 기획서를 통째로 따랐다.
+  · 🧭 통합 시작 탭 재설계 — 파일 하나 · 버튼 두 개
+      ① 기획서 진단 — 표시 없는 원문을 요소 단위(로그라인·인물·학교·대회·사건·결말·
+        무공 체계)로 KEEP / IMPROVE / GAP 판정, 강점·약점·보강 제안
+      채택표 — 영역·요소·판정·강점·약점·제안·채택. 채택은 원문 유지 / 제안 채택 /
+        보류. 기본값은 강점만 '원문 유지', 나머지는 '보류'. 제안 칸은 작가가 직접 고쳐 쓸 수 있다
+      ② 채택해서 시작 — 채택표를 최우선 지시로 만들어 컨셉 카드부터 서사 장치까지 생성
+  · 기획서 줄 앞 표시를 그대로 따른다 — [확정]·[확정·원고] 고정 / [검토] 작가 결정 /
+    [미정] 비워 둠. '작가 방향' 섹션은 자동으로 최우선 지시가 된다
+  · 메모·확정 원고 파일·생성 범위는 "추가 입력 (선택)" 접힘 칸으로 이동
+  · 기획서 서명에 채택표 포함 — 채택을 바꾸면 이전 산출물에 '이전 기준' 경고
+  · 백업에 brief_diagnosis · adoption_block 포함
 v2.10.0 (2026-11-07) — Planning Start Pack (기획부터 한 번에 시작)
   · [사고 원인] 아미고의 컨셉 카드·Core Arc·캐릭터 바이블이 작가가 이미 버린
     1차 기획서(v1.0) 위에 만들어져 있었다. 작가가 고친 방향을 넣을 칸이 없었고,
@@ -332,6 +347,13 @@ from prompt import (
     build_narrative_devices_prompt,
     build_narrative_device_block,
     NARRATIVE_DEVICE_FIELDS,
+    # v2.11.0 신규 — 정본 기획서 진단 · 채택
+    parse_tagged_brief,
+    build_brief_diagnosis_prompt,
+    diagnosis_rows,
+    compose_adoption_block,
+    DIAG_VERDICTS,
+    DIAG_CHOICES,
 )
 from profession_pack import (
     PROFESSION_PACK,
@@ -816,6 +838,9 @@ defaults = {
     "episode_meta": {},            # {ep: {"source": "author"|"engine", ...}}
     "artifact_sigs": {},           # {산출물: 생성 당시 기획서 서명}
     "unified_report": None,        # 통합 시작 결과 요약
+    # v2.11.0 정본 기획서 진단 · 채택
+    "brief_diagnosis": None,       # {"rows": [...], "overall": str, "brief_sig": str}
+    "adoption_block": "",          # 작가가 고른 채택표 → 최우선 지시
     "dev_ver": 0,                  # 서사 장치 편집표 갱신 카운터
 }
 for k, v in defaults.items():
@@ -854,6 +879,8 @@ PROJECT_KEYS = [
     "producer_note", "style_dna", "style_strength", "brief_text",
     # v2.10.0: 작가 방향 메모 · 원고 출처 · 기획서 버전 서명
     "author_direction", "episode_meta", "artifact_sigs",
+    # v2.11.0: 진단 결과와 채택표
+    "brief_diagnosis", "adoption_block",
 ]
 
 
@@ -927,9 +954,21 @@ def _brief_sig():
     import hashlib
     b = st.session_state.get("brief_text") or ""
     d = st.session_state.get("author_direction") or ""
-    if not (b.strip() or d.strip()):
+    a = st.session_state.get("adoption_block") or ""      # v2.11.0
+    if not (b.strip() or d.strip() or a.strip()):
         return ""
-    return hashlib.sha1((b + "\n§\n" + d).encode("utf-8")).hexdigest()[:10]
+    return hashlib.sha1((b + "\n§\n" + d + "\n§\n" + a).encode("utf-8")).hexdigest()[:10]
+
+
+def _effective_direction():
+    """프롬프트에 들어갈 최우선 지시 = 기획서의 '작가 방향' 섹션 + 추가 메모 + 채택표."""
+    _t, _u, _dir_sec = parse_tagged_brief(st.session_state.get("brief_text") or "")
+    parts = [x for x in (
+        _dir_sec.strip(),
+        (st.session_state.get("author_direction") or "").strip(),
+        (st.session_state.get("adoption_block") or "").strip(),
+    ) if x]
+    return "\n\n".join(parts)
 
 
 def _stamp(name):
@@ -1087,67 +1126,139 @@ with tab1:
         "🌱 IdeaSeed JSON",  # v2.0 신규
     ])
 
-    # ── 서브탭 0: 통합 시작 (v2.10.0) ──
-    # 기획서 · 작가 방향 메모 · 확정 원고를 한 번에 넣고 STEP 1 재료를 모두 만든다.
-    # 우선순위: 작가 방향 메모 > 확정 원고 > 기획서
+    # ── 서브탭 0: 통합 시작 (v2.11.0 — 정본 기획서 하나 → 진단 → 채택) ──
+    # 기획서는 100점짜리가 아니다. 통째로 따르지 않고, 엔진이 요소 단위로
+    # 진단한 뒤 작가가 고른 것만 가져간다.
     with sub_tabs_1[0]:
         st.caption(
-            "기획서와 작가 방향 메모, 이미 쓴 원고를 한 번에 넣으면 컨셉 카드 · 초식 바이블 · "
-            "스토리라인 · 세계관 바이블 · 서사 장치 초안까지 차례로 만듭니다. "
-            "**작가 방향 메모가 기획서보다 우선합니다.**"
+            "정본 기획서 파일 하나로 시작합니다. 엔진이 기획서를 진단해 **강한 부분은 그대로 가져오고, "
+            "약한 부분은 보강 제안과 함께 보여줍니다.** 무엇을 쓸지는 작가가 표에서 고릅니다."
+        )
+        st.caption(
+            "줄 앞에 표시를 붙이면 진단 없이 그대로 따릅니다 — "
+            "**[확정]** 그대로 채택 · **[검토]** 작가 결정 · **[미정]** 비워 둠 · **[확정·원고]** 원고에 쓰인 사실. "
+            "'작가 방향' 섹션은 자동으로 최우선 지시가 됩니다."
         )
         _u_brief = st.file_uploader(
-            "① 기획서 (DOCX/HWP/PDF/TXT/MD)",
+            "정본 기획서 (DOCX / HWP / PDF / TXT / MD)",
             type=["docx", "hwp", "pdf", "txt", "md"],
             key="u_brief",
         )
-        if not _u_brief and st.session_state.brief_text:
-            st.caption(f"이미 불러온 기획서를 씁니다 ({len(st.session_state.brief_text):,}자).")
+        if _u_brief is not None:
+            try:
+                _new_brief = parse_brief(_u_brief)
+                if _new_brief and _new_brief != st.session_state.brief_text:
+                    st.session_state.brief_text = _new_brief
+                    st.session_state.brief_diagnosis = None
+                    st.session_state.adoption_block = ""
+            except Exception as _e:
+                st.error(f"기획서 읽기 실패: {_e}")
 
-        st.session_state.author_direction = st.text_area(
-            "② 작가 방향 메모 — 최우선 (기획서에서 바꾼 것, 반드시 지킬 것, 버릴 것)",
-            value=st.session_state.author_direction,
-            height=220,
-            key="u_direction",
-            placeholder=(
-                "예) 1차 기획서의 '기초가 부족해 수업을 못 따라가는 지훈'은 버린다.\n"
-                "지훈은 현의 피와 유정의 약으로 그릇이 이미 신급이고, 본인은 그 사실을 모른다.\n"
-                "스승들에게 배우는 것은 위력이 아니라 제어다.\n"
-                "곽정(사조영웅전)처럼 모두에게 배워 최강이 되지만, 신급 부모 설정으로 반드시 갈라진다.\n"
-                "학교 쪽 악역은 김두현. 정부 쪽 인물은 아직 정하지 않았다 — 지어내지 말 것."
-            ),
-        )
+        _brief = st.session_state.brief_text or ""
+        if _brief:
+            _tg, _untag, _dsec = parse_tagged_brief(_brief)
+            _cnt = {k: sum(1 for x in _tg if x["tag"] == k) for k in ("확정", "확정·원고", "검토", "미정")}
+            _secs = extract_brief_sections(_brief)
+            st.caption(
+                f"기획서 {len(_brief):,}자 · 섹션 {len([k for k in _secs if k != 'other'])}개 · "
+                f"표시 — 확정 {_cnt['확정']} · 원고 {_cnt['확정·원고']} · 검토 {_cnt['검토']} · 미정 {_cnt['미정']} · "
+                f"작가 방향 {'있음' if _dsec.strip() else '없음'}"
+            )
 
-        _u_eps = st.file_uploader(
-            "③ 확정 원고 (선택 · 여러 개 · 파일 이름에 EP001 / 1화 같은 회차 번호)",
-            type=["docx", "txt", "md"],
-            accept_multiple_files=True,
-            key="u_eps",
-        )
-        _u_rating = st.radio("원고 수위", ["15금", "19금"], horizontal=True, key="u_rating")
+        with st.expander("추가 입력 (선택) — 메모 · 확정 원고 파일 · 생성 범위", expanded=False):
+            st.session_state.author_direction = st.text_area(
+                "추가 작가 메모 (기획서의 '작가 방향'에 덧붙일 내용)",
+                value=st.session_state.author_direction,
+                height=120,
+                key="u_direction",
+            )
+            _u_eps = st.file_uploader(
+                "확정 원고 파일 (여러 개 · 파일 이름의 EP001 / 1화로 회차 인식)",
+                type=["docx", "txt", "md"],
+                accept_multiple_files=True,
+                key="u_eps",
+            )
+            _u_rating = st.radio("원고 수위", ["15금", "19금"], horizontal=True, key="u_rating")
+            _uc1, _uc2, _uc3 = st.columns(3)
+            with _uc1:
+                _do_concept = st.checkbox("컨셉 카드", value=True, key="u_do_concept")
+                _do_martial = st.checkbox("초식 바이블", value=True, key="u_do_martial")
+            with _uc2:
+                _do_story = st.checkbox("스토리라인", value=True, key="u_do_story")
+                _do_world = st.checkbox("세계관 바이블 초안", value=True, key="u_do_world")
+            with _uc3:
+                _do_device = st.checkbox("서사 장치 초안", value=True, key="u_do_device")
 
-        _uc1, _uc2, _uc3 = st.columns(3)
-        with _uc1:
-            _do_concept = st.checkbox("컨셉 카드", value=True, key="u_do_concept")
-            _do_martial = st.checkbox("초식 바이블", value=True, key="u_do_martial")
-        with _uc2:
-            _do_story = st.checkbox("스토리라인", value=True, key="u_do_story")
-            _do_world = st.checkbox("세계관 바이블 초안", value=True, key="u_do_world")
-        with _uc3:
-            _do_device = st.checkbox("서사 장치 초안", value=True, key="u_do_device")
+        # ── ① 진단 ──
+        if st.button("① 기획서 진단", use_container_width=True, key="u_diag",
+                     disabled=not _brief.strip(),
+                     type="primary" if not st.session_state.brief_diagnosis else "secondary"):
+            with st.spinner("기획서를 요소 단위로 진단하는 중... (1~2분)"):
+                _tg, _untag, _dsec = parse_tagged_brief(_brief)
+                _raw = call_claude(build_brief_diagnosis_prompt(_untag, _tg),
+                                   max_tokens=MAX_TOKENS_EPISODE)
+                _p = safe_json(_raw)
+                if isinstance(_p, dict) and isinstance(_p.get("items"), list):
+                    st.session_state.brief_diagnosis = {
+                        "rows": diagnosis_rows(_p["items"], _tg),
+                        "overall": str(_p.get("overall") or ""),
+                        "brief_sig": _brief_sig(),
+                    }
+                    st.rerun()
+                else:
+                    st.error("진단 실패 — 응답을 JSON으로 해석하지 못했습니다. 다시 눌러 주세요.")
 
-        if st.button("🚀 한 번에 시작", type="primary", use_container_width=True, key="u_start"):
-            _report = {"steps": [], "pending": [], "episodes": []}
-            if _u_brief is not None:
-                try:
-                    st.session_state.brief_text = parse_brief(_u_brief)
-                except Exception as _e:
-                    st.error(f"기획서 읽기 실패: {_e}")
-            _brief = st.session_state.brief_text or ""
-            _dir = st.session_state.author_direction or ""
-            if not _brief.strip() and not _dir.strip():
-                st.error("기획서나 작가 방향 메모 중 하나는 있어야 시작할 수 있습니다.")
-            else:
+        _diag = st.session_state.brief_diagnosis
+        if _diag and _diag.get("rows"):
+            import pandas as _pd
+            _rows = _diag["rows"]
+            _vc = {v: sum(1 for r in _rows if r["verdict"] == v) for v in DIAG_VERDICTS}
+            st.markdown(
+                f"**진단 결과** — 작가 확정 {_vc['LOCK']} · 강점 {_vc['KEEP']} · 보강 후보 {_vc['IMPROVE']} · "
+                f"작가 결정 {_vc['DECIDE']} · 빈칸 {_vc['GAP']}"
+            )
+            if _diag.get("overall"):
+                st.info(_diag["overall"])
+            st.caption(
+                "**채택** 칸에서 고릅니다. 원문 유지 = 그 원문을 쓴다 · 제안 채택 = 제안 칸의 내용으로 쓴다 "
+                "(제안 칸은 직접 고쳐 써도 됩니다) · 보류 = 원문을 따르지 않고 비워 둔다. "
+                "기본값은 강점만 '원문 유지', 나머지는 '보류'입니다."
+            )
+            _show = [r for r in _rows if r["verdict"] != "LOCK"]
+            _df = _pd.DataFrame([{
+                "영역": r["area"], "요소": r["element"],
+                "판정": DIAG_VERDICTS.get(r["verdict"], r["verdict"]),
+                "강점": r["strength"], "약점": r["weakness"],
+                "제안": r["proposal"], "채택": r["choice"],
+            } for r in _show])
+            _ed = st.data_editor(
+                _df,
+                use_container_width=True,
+                hide_index=True,
+                key=f"diag_editor_{_diag.get('brief_sig', '')}",
+                disabled=["영역", "요소", "판정", "강점", "약점"],
+                column_config={
+                    "채택": st.column_config.SelectboxColumn("채택", options=DIAG_CHOICES, required=True),
+                    "제안": st.column_config.TextColumn("제안 (직접 고쳐 써도 됨)"),
+                },
+            )
+            with st.expander(f"작가 확정 줄 {_vc['LOCK']}개 (진단 없이 그대로 채택)", expanded=False):
+                st.markdown("\n".join(f"- ({r['area']}) {r['quote']}" for r in _rows if r["verdict"] == "LOCK"))
+
+            # ── ② 채택해서 시작 ──
+            if st.button("② 채택해서 시작", type="primary", use_container_width=True, key="u_start"):
+                _edited = _ed.fillna("").to_dict("records")
+                _final = [r for r in _rows if r["verdict"] == "LOCK"]
+                for _r, _e in zip(_show, _edited):
+                    _r = dict(_r)
+                    _r["choice"] = _e.get("채택") or "보류"
+                    _r["proposal"] = str(_e.get("제안") or "")
+                    _final.append(_r)
+                st.session_state.brief_diagnosis["rows"] = _final
+                st.session_state.adoption_block = compose_adoption_block(_final)
+                _report = {"steps": [], "pending": [], "episodes": []}
+                _dir = _effective_direction()
+
                 # 확정 원고 등록
                 _slot = "episodes_19" if _u_rating == "19금" else "episodes_15"
                 _meta = dict(st.session_state.episode_meta or {})
@@ -1170,15 +1281,12 @@ with tab1:
 
                 _cc_old = st.session_state.concept_card or {}
                 _cc = dict(_cc_old)
-                with st.status("통합 시작 진행 중...", expanded=True) as _status:
-                    # 1) 컨셉 카드
+                with st.status("채택한 내용으로 STEP 1 재료를 만드는 중...", expanded=True) as _status:
                     if _do_concept:
                         st.write("① 컨셉 카드 작성 중...")
-                        _raw = call_claude(build_parse_brief_prompt(_brief, _dir, _canon),
-                                           max_tokens=MAX_TOKENS_STRUCTURE)
-                        _parsed = _coerce_concept_card(safe_json(_raw))
+                        _parsed = _coerce_concept_card(safe_json(call_claude(
+                            build_parse_brief_prompt(_brief, _dir, _canon), max_tokens=MAX_TOKENS_STRUCTURE)))
                         if _parsed:
-                            # 작가가 이미 정한 세계관·서사 장치는 보존
                             for _k in ("world_type", "fantasy_level", "fantasy_peak_level",
                                        "fantasy_peak_from_ep", "world_bible", "mentorship_ledger",
                                        "awakening_graph", "reference_diff"):
@@ -1192,8 +1300,7 @@ with tab1:
                     st.session_state.concept_card = _cc
                     _stamp("concept_card")
 
-                    # 2) 초식 바이블
-                    if _do_martial and _brief.strip():
+                    if _do_martial:
                         st.write("② 초식 바이블 추출 중...")
                         _p = safe_json(call_claude(build_martial_bible_prompt(_brief, _cc),
                                                    max_tokens=MAX_TOKENS_STRUCTURE))
@@ -1204,8 +1311,7 @@ with tab1:
                         else:
                             _report["steps"].append("❌ 초식 바이블 — 해석 실패")
 
-                    # 3) 스토리라인
-                    if _do_story and _brief.strip():
+                    if _do_story:
                         st.write("③ 스토리라인 추출 중...")
                         _p = safe_json(call_claude(build_storyline_extract_prompt(_brief, _cc),
                                                    max_tokens=MAX_TOKENS_STRUCTURE))
@@ -1216,7 +1322,6 @@ with tab1:
                         else:
                             _report["steps"].append("❌ 스토리라인 — 해석 실패")
 
-                    # 4) 세계관 바이블 초안 — 빈 칸만
                     if _do_world:
                         st.write("④ 세계관 바이블 초안 작성 중...")
                         _wt = resolve_world_type(_cc)
@@ -1232,26 +1337,25 @@ with tab1:
                                     _n += 1
                             _cc["world_bible"] = _wb
                             _cc.setdefault("world_type", _wt)
-                            _report["steps"].append(f"✅ 세계관 바이블 초안 — {_n}칸 채움 ({_wt})")
                             _wlab = {k: lb for k, lb, _g in WORLD_TYPES[_wt]["bible_fields"]}
+                            _report["steps"].append(f"✅ 세계관 바이블 초안 — {_n}칸 채움 ({_wt})")
                             _report["pending"] += [f"세계관: {_wlab.get(x, x)}" for x in (_p.get("pending") or []) if isinstance(x, str)]
                         else:
                             _report["steps"].append("❌ 세계관 바이블 — 해석 실패")
 
-                    # 5) 서사 장치 초안 — 빈 표만
                     if _do_device:
-                        st.write("⑤ 서사 장치(사사 대장·그릇 각성·레퍼런스 차별) 초안 작성 중...")
+                        st.write("⑤ 서사 장치 초안 작성 중...")
                         _p = safe_json(call_claude(
                             build_narrative_devices_prompt(_brief, _cc, _dir, _canon),
                             max_tokens=MAX_TOKENS_STRUCTURE))
                         if isinstance(_p, dict):
                             _added = []
                             for _k in NARRATIVE_DEVICE_FIELDS:
-                                _rows = [r for r in (_p.get(_k) or []) if isinstance(r, dict)
-                                         and any(str(v or "").strip() for v in r.values())]
-                                if _rows and not _cc.get(_k):
-                                    _cc[_k] = _rows
-                                    _added.append(f"{NARRATIVE_DEVICE_FIELDS[_k]['label'].split(' — ')[0]} {len(_rows)}행")
+                                _rr = [r for r in (_p.get(_k) or []) if isinstance(r, dict)
+                                       and any(str(v or "").strip() for v in r.values())]
+                                if _rr and not _cc.get(_k):
+                                    _cc[_k] = _rr
+                                    _added.append(f"{NARRATIVE_DEVICE_FIELDS[_k]['label'].split(' — ')[0]} {len(_rr)}행")
                             _report["steps"].append("✅ 서사 장치 — " + (", ".join(_added) or "새로 채운 표 없음 (이미 입력됨)"))
                             _report["pending"] += [f"서사 장치: {x}" for x in (_p.get("pending") or []) if isinstance(x, str)]
                         else:
@@ -1259,6 +1363,8 @@ with tab1:
 
                     st.session_state.concept_card = _cc
                     _status.update(label="통합 시작 완료", state="complete", expanded=False)
+                _held = [r for r in _final if r.get("choice") == "보류" and r["verdict"] != "LOCK"]
+                _report["pending"] = [f"보류: ({r['area']}) {r['element']}" for r in _held] + _report["pending"]
                 st.session_state.unified_report = _report
 
         _rep = st.session_state.get("unified_report")
@@ -1268,11 +1374,11 @@ with tab1:
                 st.markdown("**등록된 확정 원고** — " + " · ".join(_rep["episodes"]))
             st.markdown("\n".join(f"- {x}" for x in _rep.get("steps", [])))
             if _rep.get("pending"):
-                with st.expander(f"작가 결정이 필요한 항목 {len(_rep['pending'])}개", expanded=True):
+                with st.expander(f"작가 결정이 필요한 항목 {len(_rep['pending'])}개", expanded=False):
                     st.markdown("\n".join(f"- {x}" for x in _rep["pending"]))
             st.success(
-                "다음 단계 → 상단 **STEP 2 · BUILD-UP**의 ⓪ 세계관 바이블 탭에서 초안을 확인·수정한 뒤 "
-                "① Core Arc를 생성하세요."
+                "다음 단계 → 상단 **STEP 2 · BUILD-UP**의 ⓪ 세계관 바이블 탭에서 초안을 확인한 뒤 "
+                "① Core Arc를 생성하세요. 채택을 바꾸려면 위 표에서 고치고 ②를 다시 누르면 됩니다."
             )
 
     # ── 서브탭 1: 기획서 업로드 ──
@@ -1991,7 +2097,7 @@ with tab2:
                         _p = safe_json(call_claude(
                             build_narrative_devices_prompt(
                                 st.session_state.brief_text, _cc,
-                                st.session_state.author_direction,
+                                _effective_direction(),
                                 build_canon_excerpt(_canon_episodes()),
                             ),
                             max_tokens=MAX_TOKENS_STRUCTURE,

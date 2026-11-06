@@ -1,10 +1,24 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.10.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.11.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.11.0 (2026-11-07) — Strength Picker (정본 기획서 하나 → 진단 → 채택)
+  · BRIEF_SECTION_KEYS에 정본 기획서 섹션 3종 추가 — 작가 방향 / 확정 원고 / 서사 장치
+    (용도별 가중치: 컨셉 카드 압축 시 작가 방향 3.0)
+  · parse_tagged_brief() — 줄 앞 표시 [확정]·[확정·원고]·[검토]·[미정]과 표시 없는
+    원문을 분리, '작가 방향' 섹션 전문 반환
+  · build_brief_diagnosis_prompt() — 표시 없는 원문만 요소 단위로 진단
+    (KEEP 강점 / IMPROVE 보강 후보 / GAP 빈칸). 작가 [확정] 사항을 진단 기준으로 삼고,
+    보강 제안에서도 새 인물·고유명사·무공명 창작 금지
+  · diagnosis_rows() — 진단 + 작가 표시 → 채택표 행. 기본값: 확정·강점은 원문 유지,
+    나머지는 보류 (약한 원문은 작가가 고르지 않는 한 따르지 않는다)
+  · compose_adoption_block() — 채택표 → "그대로 쓴다 / 원문 대신 이렇게 / 보류" 지시 블록.
+    작가 방향 메모 경로로 모든 기획·집필 프롬프트 최상단에 들어간다
+  · import re 추가 (모듈 상단)
+  · parser.py — DOCX를 문서 순서대로 읽도록 수정 (표로 된 섹션 제목 보존)
 v2.10.0 (2026-11-07) — Planning Start Pack
   · build_author_direction_block() — 작가 방향 메모 + 확정 원고 발췌를 최우선
     블록으로. 우선순위: 작가 메모 > 확정 원고 > 기획서 > 참고 자료
@@ -260,12 +274,13 @@ v1.0 (2026-XX) — 초기 무협 엔진
 """
 
 import json
+import re  # v2.11.0 — 정본 기획서 표시 인식
 
 # ═══════════════════════════════════════════════════
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.10.0"
+ENGINE_VERSION = "v2.11.0"
 ENGINE_BUILD_DATE = "2026-11-07"
 
 # ═══════════════════════════════════════════════════
@@ -1286,7 +1301,7 @@ MAX_WORLD_BIBLE_BRIEF_CHARS = 12000
 #   → 사사 대장 · 그릇 각성 · 레퍼런스 차별 규칙
 # ═══════════════════════════════════════════════════
 
-AUTHOR_DIRECTION_MAX_CHARS = 4000
+AUTHOR_DIRECTION_MAX_CHARS = 10000   # v2.11.0: 4000 → 10000 (채택표 포함 시 잘림 방지)
 CANON_EXCERPT_PER_EP = 1500
 CANON_EXCERPT_MAX_EPS = 4
 
@@ -2441,6 +2456,10 @@ BRIEF_SECTION_KEYS = [
                    "TREATMENT", "막구조", "막 구조", "구성"]),
     ("episodes",  ["회차구성", "회차 구성", "회차별", "EPISODE", "에피소드"]),
     ("appendix",  ["별첨", "APPENDIX", "부록", "설정집", "무공설정", "무공 설정"]),
+    # v2.11.0 — 정본 기획서 전용 섹션
+    ("direction", ["작가 방향", "작가방향", "작가 메모", "확정 방향", "DIRECTION"]),
+    ("canon",     ["확정 원고", "확정원고", "원고 확정"]),
+    ("devices",   ["서사 장치", "서사장치"]),
 ]
 
 # 용도별 섹션 가중치 (합이 1이 아니어도 됨 — 비율로만 사용)
@@ -2449,19 +2468,19 @@ BRIEF_PRIORITY_PROFILES = {
     "concept": {
         "overview": 1.0, "logline": 1.0, "intent": 0.6,
         "world": 1.6, "character": 2.4, "synopsis": 1.4,
-        "storyline": 0.8, "episodes": 0.6, "appendix": 1.0, "other": 0.4,
+        "storyline": 0.8, "episodes": 0.6, "appendix": 1.0, "direction": 3.0, "canon": 1.5, "devices": 1.2, "other": 0.4,
     },
     # 초식 바이블: 별첨·세계관 최우선
     "martial": {
         "overview": 0.2, "logline": 0.2, "intent": 0.1,
         "world": 2.2, "character": 1.2, "synopsis": 0.6,
-        "storyline": 1.0, "episodes": 0.2, "appendix": 3.0, "other": 0.3,
+        "storyline": 1.0, "episodes": 0.2, "appendix": 3.0, "direction": 0.6, "canon": 0.8, "devices": 0.6, "other": 0.3,
     },
     # 스토리라인: 막 구조·시놉시스 최우선
     "storyline": {
         "overview": 0.3, "logline": 0.4, "intent": 0.2,
         "world": 0.5, "character": 0.9, "synopsis": 2.0,
-        "storyline": 3.0, "episodes": 1.6, "appendix": 0.3, "other": 0.3,
+        "storyline": 3.0, "episodes": 1.6, "appendix": 0.3, "direction": 1.2, "canon": 1.0, "devices": 1.0, "other": 0.3,
     },
 }
 
@@ -2588,7 +2607,8 @@ def compress_brief_for_prompt(brief_text, budget=12000, profile="concept"):
         "overview": "개요", "logline": "로그라인", "intent": "기획의도",
         "world": "세계관", "character": "캐릭터", "synopsis": "시놉시스",
         "storyline": "스토리라인", "episodes": "회차 구성",
-        "appendix": "별첨(무공·기보·무기)", "other": "기타",
+        "appendix": "별첨(무공·기보·무기)", "direction": "작가 방향",
+        "canon": "확정 원고", "devices": "서사 장치", "other": "기타",
     }
 
     out = []
@@ -6485,3 +6505,169 @@ def build_episode_redo_prompt(
 ## 출력
 재집필된 회차 본문만 출력하세요. JSON·메타데이터 불필요.
 """
+
+
+# ═══════════════════════════════════════════════════
+# v2.11.0 — 정본 기획서 하나로 시작 · 진단 → 채택 (Strength Picker)
+# ───────────────────────────────────────────────────
+# 작가 요청: "파일 하나로 작성하고, 엔진은 그 파일을 파악해서 장점만
+# 당겨오게." 기획서는 100점짜리가 아니므로 통째로 따르지 않는다.
+#   ① 작가가 줄 앞에 붙인 표시는 그대로 따른다
+#      [확정] / [확정·원고] → 고정 · [검토] → 작가 결정 · [미정] → 비워 둠
+#   ② 표시 없는 원문은 요소 단위로 진단한다 (KEEP / IMPROVE / GAP)
+#   ③ 무엇을 쓸지는 작가가 표에서 고른다. 엔진 제안은 작가가 고른
+#      것만 반영된다. 고르지 않은 약한 원문은 따르지 않는다.
+# ═══════════════════════════════════════════════════
+
+BRIEF_TAGS = ("확정·원고", "확정", "검토", "미정")
+BRIEF_TAG_RE = re.compile(r"^\s*\[(확정·원고|확정 · 원고|확정|검토|미정)\]\s*(.+)$")
+
+DIAG_VERDICTS = {
+    "LOCK": "작가 확정",
+    "KEEP": "강점 · 그대로",
+    "IMPROVE": "약점 · 보강 후보",
+    "GAP": "빈칸",
+    "DECIDE": "작가 결정 필요",
+}
+DIAG_CHOICES = ["원문 유지", "제안 채택", "보류"]
+
+_SECTION_LABEL = {
+    "overview": "개요", "logline": "로그라인", "intent": "기획의도",
+    "world": "세계관", "character": "캐릭터", "synopsis": "시놉시스",
+    "storyline": "스토리라인", "episodes": "회차 구성",
+    "appendix": "별첨", "direction": "작가 방향", "canon": "확정 원고",
+    "devices": "서사 장치", "other": "기타",
+}
+
+
+def parse_tagged_brief(brief_text):
+    """정본 기획서에서 표시된 줄과 표시 없는 원문을 분리한다.
+
+    Returns:
+        (tagged, untagged_text, direction_text)
+          tagged: [{"tag", "section", "text"}]
+          untagged_text: 표시 없는 줄만 섹션 제목과 함께 이어 붙인 텍스트
+          direction_text: '작가 방향' 섹션 전문 (없으면 "")
+    """
+    sections = extract_brief_sections(brief_text or "")
+    tagged, untagged_parts = [], []
+    for key, body in sections.items():
+        label = _SECTION_LABEL.get(key, key)
+        plain = []
+        for ln in body.splitlines():
+            m = BRIEF_TAG_RE.match(ln)
+            if m:
+                tg = m.group(1).replace(" ", "")
+                tagged.append({"tag": tg, "section": label, "text": m.group(2).strip()})
+            elif ln.strip():
+                plain.append(ln)
+        # 표지·읽는 법 같은 섹션 밖 앞부분은 진단하지 않는다
+        if key == "other" and len(sections) > 1:
+            plain = []
+        if plain:
+            untagged_parts.append(f"===== [{label}] =====\n" + "\n".join(plain))
+    return tagged, "\n\n".join(untagged_parts), sections.get("direction", "")
+
+
+def build_brief_diagnosis_prompt(untagged_text, tagged=None, budget=26000):
+    """표시 없는 원문을 요소 단위로 진단 — 강점은 그대로, 약점은 보강 후보로."""
+    tagged = tagged or []
+    lock = [t for t in tagged if t["tag"] in ("확정", "확정·원고")]
+    lock_txt = "\n".join(f"- ({t['section']}) {t['text']}" for t in lock[:60]) or "(없음)"
+    body = (untagged_text or "")[:budget]
+    return f"""당신은 한국 웹소설·무협 장르의 기획 편집자입니다. 아래 기획서를 요소 단위로
+진단해, 작가가 '어느 부분을 그대로 쓰고 어느 부분을 보강할지' 고를 수 있게 하세요.
+
+## 작가가 이미 확정한 사항 — 진단 기준 (이것과 충돌하면 원문이 약점이다)
+{lock_txt}
+
+## 진단할 원문 (작가 표시가 없는 부분)
+{body}
+
+## 진단 단위
+로그라인 / 주인공 설정 / 주요 인물(각각) / 학교·세력(각각) / 대회 규칙 /
+핵심 사건(막마다 3~5개) / 결말 / 무공·기보 체계 / 기획의도.
+같은 내용을 두 번 진단하지 않는다. 최대 30개.
+
+## 판정 기준
+- KEEP: 구체적이다(장면·숫자·고유명사), 이 작품만의 것이다, 갈등을 만든다,
+  작가 확정 사항과 맞는다. → 그대로 가져올 강점
+- IMPROVE: 장르 관습을 그대로 따른다 / 추상적이다 / 원문 안에서 앞뒤가 어긋난다 /
+  작가 확정 사항과 충돌한다. → 보강 후보
+- GAP: 50화 연재에 꼭 필요한데 원문에 없는 것 (예: 회차 배분, 공권력의 얼굴).
+
+## 필드 규칙
+- quote: 원문 그대로 40자 이내 발췌. GAP은 "".
+- strength / weakness: 각각 한 문장. 해당 없으면 "".
+- proposal: IMPROVE·GAP에만 한두 문장. 원문에 있는 재료를 다시 배치하는 방향으로 쓴다.
+  **새 인물 이름·새 고유명사·새 무공명을 만들지 않는다.** KEEP은 "".
+- area: 개요 / 로그라인 / 기획의도 / 세계관 / 캐릭터 / 시놉시스 / 스토리라인 / 별첨 중 하나.
+
+## 출력 — 아래 JSON 객체만
+{{
+  "items": [
+    {{"area": "", "element": "", "quote": "", "verdict": "KEEP", "strength": "", "weakness": "", "proposal": ""}}
+  ],
+  "overall": "기획서 전체의 강점 한 문장 + 가장 큰 약점 한 문장"
+}}
+JSON 외 텍스트 금지. 코드 블록 금지."""
+
+
+def diagnosis_rows(llm_items, tagged):
+    """진단 결과 + 작가 표시 줄 → 채택표 행 목록 (기본 선택값 포함)."""
+    rows = []
+    for t in tagged or []:
+        verdict = {"확정": "LOCK", "확정·원고": "LOCK", "검토": "DECIDE", "미정": "GAP"}.get(t["tag"], "DECIDE")
+        rows.append({
+            "area": t["section"], "element": t["text"][:60], "quote": t["text"],
+            "verdict": verdict, "strength": "", "weakness": "", "proposal": "",
+            "choice": "원문 유지" if verdict == "LOCK" else "보류",
+            "source": f"작가 표시 [{t['tag']}]",
+        })
+    for it in llm_items or []:
+        if not isinstance(it, dict):
+            continue
+        v = str(it.get("verdict") or "").upper().strip()
+        if v not in ("KEEP", "IMPROVE", "GAP"):
+            continue
+        rows.append({
+            "area": str(it.get("area") or ""), "element": str(it.get("element") or ""),
+            "quote": str(it.get("quote") or ""), "verdict": v,
+            "strength": str(it.get("strength") or ""), "weakness": str(it.get("weakness") or ""),
+            "proposal": str(it.get("proposal") or ""),
+            "choice": "원문 유지" if v == "KEEP" else "보류",
+            "source": "엔진 진단",
+        })
+    return rows
+
+
+def compose_adoption_block(rows):
+    """작가가 고른 채택표 → 모든 기획·집필 프롬프트에 들어갈 지시 블록."""
+    keep, swap, hold = [], [], []
+    n_lock = 0
+    for r in rows or []:
+        if r.get("verdict") == "LOCK" and (r.get("choice") or "원문 유지") == "원문 유지":
+            n_lock += 1          # 기획서에 [확정]으로 이미 적혀 있다 — 다시 나열하지 않는다
+            continue
+        ch = r.get("choice") or "보류"
+        el = r.get("element") or r.get("quote", "")[:40]
+        area = r.get("area", "")
+        if ch == "원문 유지" and r.get("verdict") != "GAP":
+            keep.append(f"- ({area}) {el}" + (f" — 원문: {r['quote'][:80]}" if r.get("quote") and r["quote"] != el else ""))
+        elif ch == "제안 채택" and str(r.get("proposal") or "").strip():
+            swap.append(f"- ({area}) {el}: {r['proposal'].strip()}"
+                        + (f" (원문 '{r['quote'][:60]}' 대신)" if r.get("quote") else ""))
+        else:
+            hold.append(f"- ({area}) {(r.get('quote') or el)[:140]}")
+    if not (keep or swap or hold or n_lock):
+        return ""
+    out = ["## 📋 기획서 진단 채택표 (작가 선택 — 최우선)"]
+    if n_lock:
+        out.append(f"- 기획서에서 [확정]·[확정·원고] 표시된 줄({n_lock}개)은 그대로 따른다.")
+    if keep:
+        out += ["### 그대로 쓴다 — 기획서의 강점", *keep]
+    if swap:
+        out += ["", "### 원문 대신 이렇게 쓴다 — 작가가 고른 보강안", *swap]
+    if hold:
+        out += ["", "### 보류 — 원문을 따르지 않고, 새로 지어내지도 않는다 (작가 결정 전까지 비워 둔다)", *hold]
+    return "\n".join(out)
