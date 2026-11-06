@@ -1,10 +1,29 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.9.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.10.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.10.0 (2026-11-07) — Planning Start Pack
+  · build_author_direction_block() — 작가 방향 메모 + 확정 원고 발췌를 최우선
+    블록으로. 우선순위: 작가 메모 > 확정 원고 > 기획서 > 참고 자료
+  · build_canon_excerpt() — 확정 원고 회차별 앞 1,500자 발췌 (int/str 키 모두)
+  · 주입 지점: 컨셉 카드(build_parse_brief_prompt) · Core Arc · 회차 플롯 ·
+    본문 집필 · 캐릭터 바이블 · 세계관 바이블 · 컨셉 보강
+  · [원칙 M 재발 차단] build_character_bible_prompt — "메인 빌런 필수"가 이름 없는
+    역할을 지어내게 했다. 컨셉 카드에 이름 있는 인물만 쓰고, 빈 역할은
+    {"name": "", "_pending": "작가 결정 필요"}로 남긴다
+  · [원칙 M 재발 차단] build_augment_concept_prompt — "주인공·조연의 이름은 무협
+    느낌 있게 (한자 2~3자)" 지시 삭제. 아미고 7/25 컨셉 카드의 '강무진'이
+    이 지시에서 나왔다. 이름 창작 금지·새 조연 추가 금지로 교체
+  · NARRATIVE_DEVICE_FIELDS — 서사 장치 3종 스키마 (컨셉 카드 필드, 키 고정)
+      mentorship_ledger  사사 대장 (스승·전수 무공·회차·주인공식 소화)
+      awakening_graph    그릇 각성 (겹·장면·회차·목격자·대가·검출 단어)
+      reference_diff     레퍼런스 차별 (닮은 작품·같은 점·반드시 달라야 할 점)
+  · build_narrative_device_block() — 회차 기준으로 "습득 / 아직 배우지 않음",
+    "이미 드러남 / 감출 것"을 나눠 지시. Core Arc는 전체 표
+  · build_narrative_devices_prompt() — 근거 있는 것만 추출, 회차 근거 없으면 ""
 v2.9.0 (2026-11-06) — 세계 유형 축 + 판타지 수위 다이얼 (World Type Pack)
   · [사고 원인] 세계관 기본 설정이 WUXIA_CLASSIC_WORLDBUILDING(명·청대
     중원) 하나뿐이었고, 공식과 상관없이 모든 작품의 Core Arc·본문 집필에
@@ -246,8 +265,8 @@ import json
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.9.0"
-ENGINE_BUILD_DATE = "2026-11-06"
+ENGINE_VERSION = "v2.10.0"
+ENGINE_BUILD_DATE = "2026-11-07"
 
 # ═══════════════════════════════════════════════════
 # SYSTEM PROMPT — 무협 웹소설 작가 페르소나
@@ -1194,7 +1213,7 @@ def build_density_override_block(concept_card, ep_number=0):
     )
 
 
-def build_world_bible_prompt(brief_text, concept_card, world_type=None):
+def build_world_bible_prompt(brief_text, concept_card, world_type=None, author_direction="", canon_excerpt=""):
     """기획서 → 세계관 바이블 초안 (v2.9.0). 빈 칸만 채우는 용도.
 
     원칙 M: 기획서에 없는 내용은 지어내지 않고 pending으로 돌린다.
@@ -1216,7 +1235,10 @@ def build_world_bible_prompt(brief_text, concept_card, world_type=None):
     except Exception:
         cc_txt = ""
 
-    return f"""다음 기획서와 컨셉 카드에서 **세계관 바이블** 항목을 추출하세요.
+    _dir = author_direction or cc.get("author_direction", "")
+    return f"""{build_author_direction_block(_dir, canon_excerpt)}
+
+다음 기획서와 컨셉 카드에서 **세계관 바이블** 항목을 추출하세요.
 세계 유형: {WORLD_TYPES[wt]['label']} ({wt})
 
 ## 추출 항목 (키: 의미 — 담을 내용)
@@ -1247,6 +1269,211 @@ def build_world_bible_prompt(brief_text, concept_card, world_type=None):
 
 
 MAX_WORLD_BIBLE_BRIEF_CHARS = 12000
+
+
+# ═══════════════════════════════════════════════════
+# v2.10.0 — 통합 시작 · 작가 방향 메모 · 서사 장치 3종
+# ───────────────────────────────────────────────────
+# [사고 원인 1] 작가가 1차 기획서를 버리고 방향을 고쳤는데, 엔진에는
+#   "고친 방향"을 넣을 칸이 없었다. 엔진은 버린 기획서로 컨셉 카드·
+#   Core Arc·캐릭터 바이블을 만들었고, 아무 경고도 없었다.
+#   → 작가 방향 메모(author_direction): 기획서보다 우선하는 1순위 입력
+# [사고 원인 2] 캐릭터 바이블 양식이 "메인 빌런"을 필수로 요구해,
+#   기획서에 이름 있는 악역이 없으면 엔진이 매번 새 인물을 지어냈다
+#   (아미고: 7/25 강무진 → 7/27 서정록). 원칙 M 재발.
+# [사고 원인 3] 여러 스승에게 배워 최강이 되는 주인공(곽정형)과
+#   "본인은 모르는 힘"이 한 겹씩 드러나는 구조를 관리할 장치가 없었다.
+#   → 사사 대장 · 그릇 각성 · 레퍼런스 차별 규칙
+# ═══════════════════════════════════════════════════
+
+AUTHOR_DIRECTION_MAX_CHARS = 4000
+CANON_EXCERPT_PER_EP = 1500
+CANON_EXCERPT_MAX_EPS = 4
+
+
+def build_author_direction_block(author_direction="", canon_excerpt=""):
+    """작가 방향 메모 + 확정 원고 발췌 — 모든 기획·집필 프롬프트의 최상단 블록.
+
+    우선순위: 작가 방향 메모 > 확정 원고 > 기획서 > 그 밖의 참고 자료
+    """
+    d = (author_direction or "").strip()[:AUTHOR_DIRECTION_MAX_CHARS]
+    c = (canon_excerpt or "").strip()
+    if not d and not c:
+        return ""
+    lines = ["## 🧭 작가 확정 방향 — 최우선 (기획서와 충돌하면 이것을 따른다)"]
+    if d:
+        lines.append(d)
+    if c:
+        lines.append("")
+        lines.append("### 확정 원고 발췌 — 2순위 (원고에 나온 인물·관계·사건·능력 표현은 기획서보다 우선)")
+        lines.append(c)
+    lines.append("")
+    lines.append("### 우선순위 규칙")
+    lines.append("1. 작가 방향 메모  2. 확정 원고  3. 기획서  4. 그 밖의 참고 자료")
+    lines.append("- 아래 기획서의 설정이 위 메모·원고와 다르면 기획서 쪽을 버린다.")
+    lines.append("- 메모·원고·기획서 어디에도 없는 인물·조직·설정은 새로 만들지 않는다.")
+    return "\n".join(lines)
+
+
+def build_canon_excerpt(episodes, per_ep=CANON_EXCERPT_PER_EP, max_eps=CANON_EXCERPT_MAX_EPS):
+    """확정 원고 dict({ep: text})에서 회차별 앞부분 발췌. 키 타입(int/str) 모두 허용."""
+    if not isinstance(episodes, dict) or not episodes:
+        return ""
+    items = []
+    for k, v in episodes.items():
+        try:
+            items.append((int(k), v))
+        except (TypeError, ValueError):
+            continue
+    items.sort()
+    out = []
+    for ep, text in items[:max_eps]:
+        t = (text or "").strip()
+        if not t:
+            continue
+        body = t[:per_ep] + ("\n[...이하 생략...]" if len(t) > per_ep else "")
+        out.append(f"[EP{ep} 확정 원고 · {len(t):,}자 중 앞부분]\n{body}")
+    return "\n\n".join(out)
+
+
+# 서사 장치 3종 — 컨셉 카드 필드 스키마 (키 고정)
+NARRATIVE_DEVICE_FIELDS = {
+    "mentorship_ledger": {
+        "label": "사사 대장 — 누구에게 무엇을 언제 배우는가",
+        "columns": [("mentor", "스승"), ("art", "전수 무공"), ("ep", "회차"),
+                    ("learns_to", "주인공식 소화 — 무엇을 배우고 무엇을 덜어내는가")],
+    },
+    "awakening_graph": {
+        "label": "그릇 각성 — 원래 지닌 힘이 언제 한 겹씩 드러나는가",
+        "columns": [("layer", "겹"), ("manifestation", "드러나는 장면"), ("ep", "회차"),
+                    ("witness", "목격자"), ("cost", "대가"),
+                    ("keywords", "검출 단어 (쉼표 구분)")],
+    },
+    "reference_diff": {
+        "label": "레퍼런스 차별 규칙 — 닮은 작품과 반드시 달라야 할 점",
+        "columns": [("reference", "닮은 작품·인물"), ("same", "같은 점"),
+                    ("must_differ", "반드시 달라야 할 점")],
+    },
+}
+
+
+def _device_rows(cc, key):
+    rows = cc.get(key) if isinstance(cc, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [r for r in rows if isinstance(r, dict) and any(str(v or "").strip() for v in r.values())]
+
+
+def _ep_of(row):
+    try:
+        return int(str(row.get("ep", "")).strip().split("~")[0].split("-")[0])
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
+def build_narrative_device_block(concept_card, ep_number=0):
+    """서사 장치 3종을 프롬프트 블록으로. ep_number=0이면 전체(Core Arc용).
+
+    회차가 주어지면 '이미 배운 무공 / 아직 배우지 않은 무공',
+    '이미 드러난 겹 / 아직 감출 겹'을 나눠서 지시한다.
+    """
+    cc = _concept_as_dict(concept_card)
+    led = _device_rows(cc, "mentorship_ledger")
+    awk = _device_rows(cc, "awakening_graph")
+    ref = _device_rows(cc, "reference_diff")
+    if not (led or awk or ref):
+        return ""
+    try:
+        ep = int(ep_number or 0)
+    except (TypeError, ValueError):
+        ep = 0
+    lines = ["## 📐 서사 장치 (작가 설계 — 임의 변경 금지)"]
+
+    if led:
+        lines.append("")
+        lines.append("### 사사 대장 — 주인공은 아래 순서대로 배운다")
+        if ep:
+            learned = [r for r in led if 0 < _ep_of(r) <= ep]
+            upcoming = [r for r in led if _ep_of(r) > ep]
+            undated = [r for r in led if _ep_of(r) == 0]
+            for r in learned:
+                lines.append(f"- [습득] EP{_ep_of(r)} {r.get('mentor','')} → {r.get('art','')} / 소화: {r.get('learns_to','')}")
+            for r in upcoming:
+                lines.append(f"- [아직 배우지 않음 · EP{_ep_of(r)} 예정] {r.get('mentor','')}의 {r.get('art','')} — 이번 회차에 주인공이 이 무공을 쓰면 안 된다")
+            for r in undated:
+                lines.append(f"- [시점 미정] {r.get('mentor','')} → {r.get('art','')} — 회차를 새로 정하지 말 것")
+        else:
+            for r in led:
+                lines.append(f"- EP{r.get('ep','?')} {r.get('mentor','')} → {r.get('art','')} / 소화: {r.get('learns_to','')}")
+        lines.append("- 스승에게 배우는 장면은 '무엇을 덜어내는 법을 배웠는가'까지 보여준다.")
+
+    if awk:
+        lines.append("")
+        lines.append("### 그릇 각성 — 원래 지닌 힘은 아래 순서로만 드러난다")
+        for r in awk:
+            e = _ep_of(r)
+            if ep and e and e > ep:
+                lines.append(f"- [감출 것 · EP{e} 예정] {r.get('layer','')} — 이번 회차에 암시만 허용, 드러내지 말 것")
+            else:
+                lines.append(
+                    f"- {'[이미 드러남] ' if ep and e and e <= ep else ''}EP{r.get('ep','?')} "
+                    f"{r.get('layer','')}: {r.get('manifestation','')} / 목격 {r.get('witness','')} / 대가 {r.get('cost','')}"
+                )
+        lines.append("- 각성에는 대가가 따른다. 대가 없는 각성은 쓰지 않는다.")
+
+    if ref:
+        lines.append("")
+        lines.append("### 레퍼런스 차별 규칙 — 장면이 닮은 작품 쪽으로 미끄러지지 않게")
+        for r in ref:
+            lines.append(f"- {r.get('reference','')}: 같은 점 [{r.get('same','')}] / **반드시 다르게** [{r.get('must_differ','')}]")
+    return "\n".join(lines)
+
+
+def build_narrative_devices_prompt(brief_text, concept_card, author_direction="",
+                                   canon_excerpt=""):
+    """서사 장치 3종 초안 — 근거 있는 것만. 회차가 근거 없으면 ep는 ""."""
+    cc = _concept_as_dict(concept_card)
+    brief = (brief_text or "")[:MAX_WORLD_BIBLE_BRIEF_CHARS]
+    try:
+        import json as _json
+        cc_txt = _json.dumps({k: cc.get(k) for k in (
+            "title", "logline", "protagonist", "mentor", "key_supporting_chars",
+            "world_setting", "core_concept_notes") if cc.get(k)}, ensure_ascii=False)[:7000]
+    except Exception:
+        cc_txt = ""
+    return f"""{build_author_direction_block(author_direction, canon_excerpt)}
+
+다음 자료에서 이 작품의 **서사 장치 3종** 초안을 추출하세요.
+
+## 컨셉 카드 (요약)
+{cc_txt}
+
+## 기획서
+{brief}
+
+## 추출 대상
+1. mentorship_ledger — 주인공이 누구에게 어떤 무공을 배우는가.
+   learns_to: 주인공이 그 가르침을 자기 식으로 어떻게 소화하는가
+   (예: 이미 힘이 넘치는 주인공이라면 '위력을 줄이는 법')
+2. awakening_graph — 주인공이 원래 지닌 힘(혈통·체질·기보)이 드러나는 순서.
+   layer(겹 이름) / manifestation(드러나는 장면) / witness(목격자) /
+   cost(대가) / keywords(본문에서 그 힘을 가리키는 고유 단어 배열)
+3. reference_diff — 자료에 언급된 닮은 작품·인물과, 같은 점 / 반드시 달라야 할 점
+
+## 출력 형식 — 아래 JSON 객체만
+{{
+  "mentorship_ledger": [{{"mentor": "", "art": "", "ep": "", "learns_to": ""}}],
+  "awakening_graph": [{{"layer": "", "manifestation": "", "ep": "", "witness": "", "cost": "", "keywords": []}}],
+  "reference_diff": [{{"reference": "", "same": "", "must_differ": ""}}],
+  "pending": []
+}}
+
+## 규칙
+- 작가 방향 메모 > 확정 원고 > 기획서 순으로 따른다.
+- 자료에 근거가 있는 항목만 쓴다. 회차 번호가 자료에 없으면 ep는 "" 로 둔다.
+- 근거가 없어 비운 칸·빠진 항목은 pending 배열에 짧게 적는다 (예: "서아 창술 전수 회차").
+- 새 스승·새 무공·새 레퍼런스를 지어내지 않는다.
+- 고유명사는 자료 철자 그대로. JSON 외 텍스트 금지."""
 
 
 # ═══════════════════════════════════════════════════
@@ -4133,7 +4360,7 @@ FLOW_INDUCTION_RULES = """[독자 몰입 유도 규칙 — 강종현(2024) Flow 
 # build_* 함수들 (14개)
 # ═══════════════════════════════════════════════════
 
-def build_parse_brief_prompt(brief_text):
+def build_parse_brief_prompt(brief_text, author_direction="", canon_excerpt=""):
     """기획서 텍스트를 무협 컨셉 카드 JSON으로 파싱.
 
     [v2.0 안정화] 웹소설 엔진 v3.0 패턴 이식:
@@ -4154,7 +4381,12 @@ def build_parse_brief_prompt(brief_text):
     motif_keys = list(NARRATIVE_MOTIFS.keys())
     tone_preset_keys = list(NARRATIVE_TONE_PRESETS.keys())
 
-    return f"""다음은 무협 웹소설 기획서입니다. 분석해서 무협 컨셉 카드 JSON으로 변환하세요.
+    _dir_block = build_author_direction_block(author_direction, canon_excerpt)  # v2.10.0
+    return f"""{_dir_block}
+
+다음은 무협 웹소설 기획서입니다. 분석해서 무협 컨셉 카드 JSON으로 변환하세요.
+(위에 작가 확정 방향이 있으면 기획서보다 우선한다. 기획서의 주인공 설정이
+ 작가 방향과 다르면 작가 방향으로 컨셉 카드를 작성한다.)
 
 [기획서 원문]
 {brief_text}
@@ -4483,16 +4715,27 @@ JSON만 반환."""
 
 
 def build_augment_concept_prompt(concept_card_json):
-    """컨셉 카드 증강 (빈 필드 채우기)."""
-    return f"""다음 컨셉 카드의 빈 필드를 채우세요. 이미 있는 값은 유지.
+    """컨셉 카드 증강 (빈 필드 채우기).
+
+    v2.10.0: "이름은 무협 느낌 있게 지어라"는 지시를 삭제했다. 이 지시가
+    아미고 컨셉 카드의 빈 악역 칸에 기획서에 없는 '강무진(剛武鎭)'을 만들었다.
+    인물 이름·새 인물은 절대 만들지 않는다 (원칙 M). main.py에서도 보강 후
+    원래 비어 있던 이름 칸을 코드로 다시 비운다 (이중 차단).
+    """
+    _cc = _concept_as_dict(concept_card_json)
+    return f"""{build_author_direction_block(_cc.get("author_direction", ""))}
+
+다음 컨셉 카드의 빈 필드를 채우세요. 이미 있는 값은 유지.
 
 {concept_card_json}
 
 ## 보강 지침
 - 빈 문자열·빈 딕셔너리인 필드만 보강
-- 주인공·조연의 이름은 무협 느낌 있게 (한자 2~3자 이름)
-- 경지·소속은 일관성 있게
-- 무협 세계관 고증 준수
+- ⛔ 인물 이름(name)은 절대 새로 짓지 않는다. 이름이 빈 역할은 빈 채로 둔다
+- ⛔ key_supporting_chars에 새 인물을 추가하지 않는다
+- 보강 대상은 이미 이름이 있는 인물의 설명 필드, 세계관·대회 규칙의 빈 설명뿐이다
+- 경지·소속은 카드 안의 기존 설정과 일관되게
+- 근거가 없으면 빈 칸으로 두는 것이 정답이다
 
 JSON만 반환."""
 
@@ -4532,7 +4775,8 @@ def normalize_motif_list(motifs):
 
 def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
                           style_dna="", style_strength="중",
-                          storyline_acts=None, martial_bible=None):
+                          storyline_acts=None, martial_bible=None,
+                          canon_excerpt=""):
     """Core Arc 50화 생성.
 
     v2.4.0: 기획서 막 구조(storyline_acts)와 초식 바이블을 재료로 주입.
@@ -4561,6 +4805,10 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
 {build_world_type_block(concept_card, 0)}
 
 {build_density_override_block(concept_card, 0)}
+
+{build_author_direction_block(_concept_as_dict(concept_card).get("author_direction", ""), canon_excerpt)}
+
+{build_narrative_device_block(concept_card, 0)}
 
 {formula_block}
 
@@ -4669,8 +4917,21 @@ JSON만 반환."""
 
 
 def build_character_bible_prompt(concept_card_json, profession_blocks=""):
-    """캐릭터 바이블 생성."""
-    return f"""다음 컨셉 카드를 기반으로 주요 캐릭터들의 상세 바이블을 작성하세요.
+    """캐릭터 바이블 생성.
+
+    v2.10.0: 컨셉 카드에 이름이 없는 역할(빌런·남주 등)을 지어내지 않는다.
+    """
+    _cc = _concept_as_dict(concept_card_json)
+    return f"""{build_author_direction_block(_cc.get("author_direction", ""))}
+
+다음 컨셉 카드를 기반으로 주요 캐릭터들의 상세 바이블을 작성하세요.
+
+## ⛔ 인물 창작 금지 (v2.10.0 — 최우선)
+- 바이블에는 **컨셉 카드·작가 방향에 이름이 있는 인물만** 쓴다.
+- 컨셉 카드에서 이름이 비어 있는 역할(예: villain.name이 "", male_lead.name이 "")은
+  새 인물을 만들지 말고 {{"name": "", "_pending": "작가 결정 필요"}} 로 남긴다.
+- 조직·세력(예: "독재정부")만 있고 인물 이름이 없으면, 그 조직을 인물로 바꾸지 않는다.
+- 아래 '필수 캐릭터' 목록은 "있다면 쓴다"는 뜻이다. 목록을 채우려고 지어내지 않는다.
 
 ## 컨셉 카드
 {concept_card_json}
@@ -4678,12 +4939,12 @@ def build_character_bible_prompt(concept_card_json, profession_blocks=""):
 ## 직업 디테일 팩 (자동 주입)
 {profession_blocks}
 
-## 필수 캐릭터
+## 필수 캐릭터 (컨셉 카드에 이름이 있는 경우에만)
 - 주인공
 - 여주 / 남주 (있다면)
-- 메인 빌런
+- 메인 빌런 (컨셉 카드에 이름이 있을 때만. 없으면 _pending)
 - 사부 혹은 멘토
-- 핵심 조력자 2~3명
+- 핵심 조력자 2~3명 (컨셉 카드 key_supporting_chars 안에서 고른다)
 
 ## 각 캐릭터별 필수 필드
 1. 이름 (한글·한자)
@@ -4777,6 +5038,10 @@ def build_episode_plot_prompt(arc_block, plant_map, ep_number,
 
 {build_world_type_block(concept_card, ep_number)}
 
+{build_narrative_device_block(concept_card, ep_number)}
+
+{build_author_direction_block(_concept_as_dict(concept_card).get("author_direction", ""))}
+
 {build_opening_density_spec(concept_card, ep_number)}
 
 {build_density_override_block(concept_card, ep_number)}
@@ -4864,6 +5129,10 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
 {profession_blocks}
 
 {build_world_type_block(concept_card, ep_number)}
+
+{build_narrative_device_block(concept_card, ep_number)}
+
+{build_author_direction_block(_concept_as_dict(concept_card).get("author_direction", ""))}
 
 {world_block}
 
@@ -6191,6 +6460,8 @@ def build_episode_redo_prompt(
 {build_martial_registry_block(_parse_characters_arg(character_bible_str), episode_plots, ep_number, martial_bible=martial_bible)}
 
 {build_world_type_block(concept_dict, ep_number)}
+
+{build_narrative_device_block(concept_dict, ep_number)}
 
 {build_opening_density_spec(concept_dict, ep_number)}
 

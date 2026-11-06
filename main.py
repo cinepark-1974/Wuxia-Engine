@@ -1,9 +1,37 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.9.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.10.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.10.0 (2026-11-07) — Planning Start Pack (기획부터 한 번에 시작)
+  · [사고 원인] 아미고의 컨셉 카드·Core Arc·캐릭터 바이블이 작가가 이미 버린
+    1차 기획서(v1.0) 위에 만들어져 있었다. 작가가 고친 방향을 넣을 칸이 없었고,
+    기획서가 바뀌어도 이전 산출물에 아무 표시가 없었다.
+  · STEP 1 🧭 통합 시작 탭 신설 (첫 번째 탭)
+    — 기획서 + 작가 방향 메모(최우선) + 확정 원고(여러 개)를 한 번에 입력
+    — 한 번의 클릭으로 컨셉 카드 → 초식 바이블 → 스토리라인 →
+      세계관 바이블 초안(빈 칸만) → 서사 장치 초안(빈 표만)
+    — 원고는 파일 이름의 EP001 / 3화로 회차를 찾아 등록, 출처를 '작가'로 기록
+    — 결과 요약과 '작가 결정이 필요한 항목'을 한 화면에 표시
+  · 작가 방향 메모(author_direction) — concept_card에도 저장되어 Core Arc·플롯·
+    집필·캐릭터 바이블·세계관·서사 장치 프롬프트 최상단에 우선 주입
+  · 기획서 버전 추적 — 산출물마다 생성 당시 기획서 서명 기록(artifact_sigs).
+    기획서·메모가 바뀌면 STEP 2 상단에 "이전 기획서 기준" 경고
+  · 출처 없는 인물 경고 — 기획서·작가 메모에 없는 인물이 컨셉 카드·바이블에
+    있으면 STEP 2 상단과 바이블 생성 직후에 표시 (아미고 7/25 강무진, 7/27 서정록 검출)
+  · 컨셉 카드 "빈 필드 자동 보강" — 원래 비어 있던 인물 이름 칸은 보강 후 다시 비우고
+    새 조연 추가를 막는다 (이름 창작 이중 차단)
+  · STEP 2 ⓪ 탭에 📐 서사 장치 편집표 — 사사 대장 / 그릇 각성 / 레퍼런스 차별
+  · STEP 3 📥 작가 원고 불러오기 — 회차별 DOCX·TXT 등록 (요약·검수 결과 초기화)
+  · STEP 3 📐 서사 장치 연속성 검사 + REDO 재집필 주입
+  · 모델 교체 — claude-opus-4-7 → claude-opus-5-5, claude-sonnet-4-6 → claude-sonnet-5-5
+    · 5.5는 thinking이 항상 켜지고 max_tokens에 포함된다. 한도 상향:
+      Arc 32K→64K / 회차 8K→32K / 구조·분석 6K·4K→16K / 소형 1~2K→8K
+    · effort: 집필(Opus) high, 구조·검수(Sonnet) medium — extra_body로 전달
+    · 응답이 한도에서 잘리면(stop_reason=max_tokens) 화면에 경고
+    · temperature/top_p/top_k는 기존과 같이 사용하지 않는다
+  · 프로젝트 백업에 author_direction · episode_meta · artifact_sigs 포함
 v2.9.0 (2026-11-06) — 세계 유형 축 + 판타지 수위 다이얼 (World Type Pack)
   · STEP 2에 ⓪ 세계관 바이블 탭 신설 (Core Arc 앞)
     — 세계 유형 선택: 현대 무림형 / 중원 강호형 / 조선 역사형
@@ -298,6 +326,12 @@ from prompt import (
     build_world_bible_prompt,
     build_world_bible_block,
     build_fantasy_level_block,
+    # v2.10.0 신규 — 통합 시작 · 서사 장치
+    build_author_direction_block,
+    build_canon_excerpt,
+    build_narrative_devices_prompt,
+    build_narrative_device_block,
+    NARRATIVE_DEVICE_FIELDS,
 )
 from profession_pack import (
     PROFESSION_PACK,
@@ -334,6 +368,9 @@ from engine_validator import (
     format_youth_diagnosis_report,  # v2.3.0 신규
     scan_world_consistency,         # v2.9.0 신규
     format_world_consistency_report,  # v2.9.0 신규
+    scan_device_continuity,         # v2.10.0 신규
+    format_device_continuity_report,  # v2.10.0 신규
+    find_unsourced_characters,      # v2.10.0 신규
 )
 
 
@@ -510,12 +547,18 @@ st.markdown("""
 # ══════════════════════════════════════════════
 # API Client & Model
 # ══════════════════════════════════════════════
-MODEL_OPUS = "claude-opus-4-7"      # v2.0 — 집필 (temperature/top_p/thinking 사용 금지)
-MODEL_SONNET = "claude-sonnet-4-6"  # v2.0 — 구조 분석·자가 검수
-MAX_TOKENS_ARC = 32000     # v2.1.6 — 50화 Arc 잘림 방지 (Opus 4.7 최대 128K 내)
-MAX_TOKENS_EPISODE = 8000
-MAX_TOKENS_STRUCTURE = 6000
-MAX_TOKENS_ANALYSIS = 4000
+MODEL_OPUS = "claude-opus-5-5"      # v2.10.0 — 집필 (temperature/top_p/top_k 금지 · thinking 상시)
+MODEL_SONNET = "claude-sonnet-5-5"  # v2.10.0 — 구조 분석·자가 검수
+# v2.10.0: 5.5 모델은 thinking이 항상 켜져 있고 그 분량이 max_tokens에 포함된다.
+#   4.7 시절 한도(회차 8,000)를 그대로 두면 본문이 생각에 밀려 잘린다.
+MAX_TOKENS_ARC = 64000
+MAX_TOKENS_EPISODE = 32000
+MAX_TOKENS_STRUCTURE = 16000
+MAX_TOKENS_ANALYSIS = 16000
+MAX_TOKENS_SMALL = 8000
+# effort — 집필은 high, 구조 추출·검수는 medium. output_config는 extra_body로 보낸다
+#   (SDK 버전과 무관하게 동작)
+MODEL_EFFORT = {MODEL_OPUS: "high", MODEL_SONNET: "medium"}
 
 
 @st.cache_resource
@@ -523,25 +566,39 @@ def get_client():
     return anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 
 
-def call_claude(prompt, max_tokens=4096, model=None, system=None):
+def call_claude(prompt, max_tokens=MAX_TOKENS_STRUCTURE, model=None, system=None):
     if model is None:
         model = MODEL_SONNET
     if system is None:
         system = SYSTEM_PROMPT
     client = get_client()
     full = []
-    with client.messages.stream(
+    kwargs = dict(
         model=model,
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": prompt}],
-    ) as stream:
+    )
+    effort = MODEL_EFFORT.get(model)
+    if effort:
+        kwargs["extra_body"] = {"output_config": {"effort": effort}}
+    with client.messages.stream(**kwargs) as stream:
+        # text_stream은 텍스트 조각만 내보낸다 (thinking 블록은 자동 제외)
         for text in stream.text_stream:
             full.append(text)
+        try:
+            _final = stream.get_final_message()
+            if getattr(_final, "stop_reason", "") == "max_tokens":
+                st.warning(
+                    f"⚠️ 응답이 길이 한도({max_tokens:,} 토큰)에서 잘렸습니다. "
+                    "결과 끝부분이 비었을 수 있습니다. 다시 생성해 주세요."
+                )
+        except Exception:
+            pass
     return "".join(full)
 
 
-def call_claude_opus(prompt, max_tokens=8000, system=None):
+def call_claude_opus(prompt, max_tokens=MAX_TOKENS_EPISODE, system=None):
     return call_claude(prompt, max_tokens=max_tokens, model=MODEL_OPUS, system=system)
 
 
@@ -754,6 +811,12 @@ defaults = {
     "codex_pending": None,         # 확장 생성 후 검수 대기 항목
     "codex_pending_faction": "",   # 검수 대기 문파명
     "codex_last_report": "",       # 마지막 병합 리포트
+    # v2.10.0 통합 시작 · 버전 추적
+    "author_direction": "",        # 작가 방향 메모 — 기획서보다 우선
+    "episode_meta": {},            # {ep: {"source": "author"|"engine", ...}}
+    "artifact_sigs": {},           # {산출물: 생성 당시 기획서 서명}
+    "unified_report": None,        # 통합 시작 결과 요약
+    "dev_ver": 0,                  # 서사 장치 편집표 갱신 카운터
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -789,6 +852,8 @@ PROJECT_KEYS = [
     # 사라져 집필 프롬프트에서 A28이 작동하지 않음
     "martial_bible", "storyline_acts",
     "producer_note", "style_dna", "style_strength", "brief_text",
+    # v2.10.0: 작가 방향 메모 · 원고 출처 · 기획서 버전 서명
+    "author_direction", "episode_meta", "artifact_sigs",
 ]
 
 
@@ -850,6 +915,63 @@ def _coerce_concept_card(parsed):
     return None
 
 
+# ── v2.10.0: 기획서 버전 추적 ──
+_ARTIFACT_LABELS = {
+    "concept_card": "컨셉 카드", "core_arc": "Core Arc", "character_bible": "캐릭터 바이블",
+    "plant_map_core": "떡밥 맵", "storyline_acts": "스토리라인", "martial_bible": "초식 바이블",
+}
+
+
+def _brief_sig():
+    """현재 기획서 + 작가 방향 메모의 서명. 둘 다 비면 빈 문자열."""
+    import hashlib
+    b = st.session_state.get("brief_text") or ""
+    d = st.session_state.get("author_direction") or ""
+    if not (b.strip() or d.strip()):
+        return ""
+    return hashlib.sha1((b + "\n§\n" + d).encode("utf-8")).hexdigest()[:10]
+
+
+def _stamp(name):
+    """산출물을 만든 시점의 기획서 서명을 기록한다."""
+    sigs = st.session_state.get("artifact_sigs")
+    if not isinstance(sigs, dict):
+        sigs = {}
+    sigs[name] = _brief_sig()
+    st.session_state.artifact_sigs = sigs
+
+
+def _stale_artifacts():
+    """(이전 기획서 기준 산출물, 서명 기록 없는 산출물) 라벨 목록."""
+    cur = _brief_sig()
+    sigs = st.session_state.get("artifact_sigs") or {}
+    stale, legacy = [], []
+    for k, lb in _ARTIFACT_LABELS.items():
+        if not st.session_state.get(k):
+            continue
+        if k not in sigs:
+            legacy.append(lb)
+        elif cur and sigs[k] and sigs[k] != cur:
+            stale.append(lb)
+    return stale, legacy
+
+
+def _ep_from_filename(name):
+    """'아미고_EP002_15금.docx' → 2, '3화.txt' → 3. 못 찾으면 None."""
+    m = re.search(r"EP\s*0*(\d{1,3})", name or "", re.I) or re.search(r"(\d{1,3})\s*화", name or "")
+    return int(m.group(1)) if m else None
+
+
+def _canon_episodes():
+    """작가 원고로 등록된 회차만 {ep: text}. 등록 기록이 없으면 15금·19금 본문 전체."""
+    meta = st.session_state.get("episode_meta") or {}
+    pool = dict(st.session_state.get("episodes_15") or {})
+    pool.update({k: v for k, v in (st.session_state.get("episodes_19") or {}).items() if v})
+    authored = {k: v for k, v in pool.items()
+                if (meta.get(k) or meta.get(str(k)) or {}).get("source") == "author"}
+    return authored or {}
+
+
 def build_project_snapshot():
     snapshot = {"version": "wuxia-1.0", "saved_at": datetime.now().isoformat()}
     for k in PROJECT_KEYS:
@@ -880,6 +1002,7 @@ def _normalize_episode_keys(value):
 EPISODE_KEYED_KEYS = [
     "episode_plots", "episodes_19", "episodes_15",
     "episode_summaries", "quality_reports", "validation_results",
+    "episode_meta",   # v2.10.0
 ]
 
 
@@ -952,19 +1075,208 @@ with tab1:
     st.markdown('<div class="section-header"><span>CONCEPT · 작품 컨셉 설계</span></div>', unsafe_allow_html=True)
 
     st.caption(
-        "아래 4가지 방식 중 **하나만** 골라 컨셉 카드를 만듭니다. "
-        "기획서 파일이 있으면 첫 번째 탭을 권합니다."
+        "아래 5가지 방식 중 **하나만** 골라 컨셉 카드를 만듭니다. "
+        "기획서와 작가 방향 메모, 이미 쓴 원고가 있으면 첫 번째 🧭 통합 시작을 권합니다."
     )
 
     sub_tabs_1 = st.tabs([
+        "🧭 통합 시작 (권장)",  # v2.10.0 신규
         "📄 기획서 업로드",
         "💡 아이디어 생성",
         "✏️ 직접 입력",
         "🌱 IdeaSeed JSON",  # v2.0 신규
     ])
 
-    # ── 서브탭 1: 기획서 업로드 ──
+    # ── 서브탭 0: 통합 시작 (v2.10.0) ──
+    # 기획서 · 작가 방향 메모 · 확정 원고를 한 번에 넣고 STEP 1 재료를 모두 만든다.
+    # 우선순위: 작가 방향 메모 > 확정 원고 > 기획서
     with sub_tabs_1[0]:
+        st.caption(
+            "기획서와 작가 방향 메모, 이미 쓴 원고를 한 번에 넣으면 컨셉 카드 · 초식 바이블 · "
+            "스토리라인 · 세계관 바이블 · 서사 장치 초안까지 차례로 만듭니다. "
+            "**작가 방향 메모가 기획서보다 우선합니다.**"
+        )
+        _u_brief = st.file_uploader(
+            "① 기획서 (DOCX/HWP/PDF/TXT/MD)",
+            type=["docx", "hwp", "pdf", "txt", "md"],
+            key="u_brief",
+        )
+        if not _u_brief and st.session_state.brief_text:
+            st.caption(f"이미 불러온 기획서를 씁니다 ({len(st.session_state.brief_text):,}자).")
+
+        st.session_state.author_direction = st.text_area(
+            "② 작가 방향 메모 — 최우선 (기획서에서 바꾼 것, 반드시 지킬 것, 버릴 것)",
+            value=st.session_state.author_direction,
+            height=220,
+            key="u_direction",
+            placeholder=(
+                "예) 1차 기획서의 '기초가 부족해 수업을 못 따라가는 지훈'은 버린다.\n"
+                "지훈은 현의 피와 유정의 약으로 그릇이 이미 신급이고, 본인은 그 사실을 모른다.\n"
+                "스승들에게 배우는 것은 위력이 아니라 제어다.\n"
+                "곽정(사조영웅전)처럼 모두에게 배워 최강이 되지만, 신급 부모 설정으로 반드시 갈라진다.\n"
+                "학교 쪽 악역은 김두현. 정부 쪽 인물은 아직 정하지 않았다 — 지어내지 말 것."
+            ),
+        )
+
+        _u_eps = st.file_uploader(
+            "③ 확정 원고 (선택 · 여러 개 · 파일 이름에 EP001 / 1화 같은 회차 번호)",
+            type=["docx", "txt", "md"],
+            accept_multiple_files=True,
+            key="u_eps",
+        )
+        _u_rating = st.radio("원고 수위", ["15금", "19금"], horizontal=True, key="u_rating")
+
+        _uc1, _uc2, _uc3 = st.columns(3)
+        with _uc1:
+            _do_concept = st.checkbox("컨셉 카드", value=True, key="u_do_concept")
+            _do_martial = st.checkbox("초식 바이블", value=True, key="u_do_martial")
+        with _uc2:
+            _do_story = st.checkbox("스토리라인", value=True, key="u_do_story")
+            _do_world = st.checkbox("세계관 바이블 초안", value=True, key="u_do_world")
+        with _uc3:
+            _do_device = st.checkbox("서사 장치 초안", value=True, key="u_do_device")
+
+        if st.button("🚀 한 번에 시작", type="primary", use_container_width=True, key="u_start"):
+            _report = {"steps": [], "pending": [], "episodes": []}
+            if _u_brief is not None:
+                try:
+                    st.session_state.brief_text = parse_brief(_u_brief)
+                except Exception as _e:
+                    st.error(f"기획서 읽기 실패: {_e}")
+            _brief = st.session_state.brief_text or ""
+            _dir = st.session_state.author_direction or ""
+            if not _brief.strip() and not _dir.strip():
+                st.error("기획서나 작가 방향 메모 중 하나는 있어야 시작할 수 있습니다.")
+            else:
+                # 확정 원고 등록
+                _slot = "episodes_19" if _u_rating == "19금" else "episodes_15"
+                _meta = dict(st.session_state.episode_meta or {})
+                _next = max([0] + [int(k) for k in (st.session_state[_slot] or {}).keys()
+                                   if str(k).isdigit()]) + 1
+                for _f in (_u_eps or []):
+                    try:
+                        _txt = parse_brief(_f)
+                    except Exception as _e:
+                        st.error(f"{_f.name} 읽기 실패: {_e}")
+                        continue
+                    _ep = _ep_from_filename(_f.name) or _next
+                    _next = max(_next, _ep + 1)
+                    st.session_state[_slot][_ep] = _txt
+                    _meta[_ep] = {"source": "author", "file": _f.name,
+                                  "imported_at": datetime.now().isoformat(timespec="seconds")}
+                    _report["episodes"].append(f"EP{_ep} ← {_f.name} ({len(_txt):,}자)")
+                st.session_state.episode_meta = _meta
+                _canon = build_canon_excerpt(_canon_episodes())
+
+                _cc_old = st.session_state.concept_card or {}
+                _cc = dict(_cc_old)
+                with st.status("통합 시작 진행 중...", expanded=True) as _status:
+                    # 1) 컨셉 카드
+                    if _do_concept:
+                        st.write("① 컨셉 카드 작성 중...")
+                        _raw = call_claude(build_parse_brief_prompt(_brief, _dir, _canon),
+                                           max_tokens=MAX_TOKENS_STRUCTURE)
+                        _parsed = _coerce_concept_card(safe_json(_raw))
+                        if _parsed:
+                            # 작가가 이미 정한 세계관·서사 장치는 보존
+                            for _k in ("world_type", "fantasy_level", "fantasy_peak_level",
+                                       "fantasy_peak_from_ep", "world_bible", "mentorship_ledger",
+                                       "awakening_graph", "reference_diff"):
+                                if _k in _cc_old and _k not in _parsed:
+                                    _parsed[_k] = _cc_old[_k]
+                            _cc = _parsed
+                            _report["steps"].append("✅ 컨셉 카드")
+                        else:
+                            _report["steps"].append("❌ 컨셉 카드 — JSON 해석 실패 (이전 카드 유지)")
+                    _cc["author_direction"] = _dir
+                    st.session_state.concept_card = _cc
+                    _stamp("concept_card")
+
+                    # 2) 초식 바이블
+                    if _do_martial and _brief.strip():
+                        st.write("② 초식 바이블 추출 중...")
+                        _p = safe_json(call_claude(build_martial_bible_prompt(_brief, _cc),
+                                                   max_tokens=MAX_TOKENS_STRUCTURE))
+                        if isinstance(_p, dict) and _p:
+                            st.session_state.martial_bible = _p
+                            _stamp("martial_bible")
+                            _report["steps"].append("✅ 초식 바이블")
+                        else:
+                            _report["steps"].append("❌ 초식 바이블 — 해석 실패")
+
+                    # 3) 스토리라인
+                    if _do_story and _brief.strip():
+                        st.write("③ 스토리라인 추출 중...")
+                        _p = safe_json(call_claude(build_storyline_extract_prompt(_brief, _cc),
+                                                   max_tokens=MAX_TOKENS_STRUCTURE))
+                        if isinstance(_p, dict) and _p:
+                            st.session_state.storyline_acts = _p
+                            _stamp("storyline_acts")
+                            _report["steps"].append("✅ 스토리라인")
+                        else:
+                            _report["steps"].append("❌ 스토리라인 — 해석 실패")
+
+                    # 4) 세계관 바이블 초안 — 빈 칸만
+                    if _do_world:
+                        st.write("④ 세계관 바이블 초안 작성 중...")
+                        _wt = resolve_world_type(_cc)
+                        _p = safe_json(call_claude(
+                            build_world_bible_prompt(_brief, _cc, _wt, _dir, _canon),
+                            max_tokens=MAX_TOKENS_STRUCTURE))
+                        if isinstance(_p, dict) and isinstance(_p.get("fields"), dict):
+                            _wb = dict(_cc.get("world_bible") or {})
+                            _n = 0
+                            for _k, _v in _p["fields"].items():
+                                if isinstance(_v, str) and _v.strip() and not str(_wb.get(_k) or "").strip():
+                                    _wb[_k] = _v.strip()
+                                    _n += 1
+                            _cc["world_bible"] = _wb
+                            _cc.setdefault("world_type", _wt)
+                            _report["steps"].append(f"✅ 세계관 바이블 초안 — {_n}칸 채움 ({_wt})")
+                            _wlab = {k: lb for k, lb, _g in WORLD_TYPES[_wt]["bible_fields"]}
+                            _report["pending"] += [f"세계관: {_wlab.get(x, x)}" for x in (_p.get("pending") or []) if isinstance(x, str)]
+                        else:
+                            _report["steps"].append("❌ 세계관 바이블 — 해석 실패")
+
+                    # 5) 서사 장치 초안 — 빈 표만
+                    if _do_device:
+                        st.write("⑤ 서사 장치(사사 대장·그릇 각성·레퍼런스 차별) 초안 작성 중...")
+                        _p = safe_json(call_claude(
+                            build_narrative_devices_prompt(_brief, _cc, _dir, _canon),
+                            max_tokens=MAX_TOKENS_STRUCTURE))
+                        if isinstance(_p, dict):
+                            _added = []
+                            for _k in NARRATIVE_DEVICE_FIELDS:
+                                _rows = [r for r in (_p.get(_k) or []) if isinstance(r, dict)
+                                         and any(str(v or "").strip() for v in r.values())]
+                                if _rows and not _cc.get(_k):
+                                    _cc[_k] = _rows
+                                    _added.append(f"{NARRATIVE_DEVICE_FIELDS[_k]['label'].split(' — ')[0]} {len(_rows)}행")
+                            _report["steps"].append("✅ 서사 장치 — " + (", ".join(_added) or "새로 채운 표 없음 (이미 입력됨)"))
+                            _report["pending"] += [f"서사 장치: {x}" for x in (_p.get("pending") or []) if isinstance(x, str)]
+                        else:
+                            _report["steps"].append("❌ 서사 장치 — 해석 실패")
+
+                    st.session_state.concept_card = _cc
+                    _status.update(label="통합 시작 완료", state="complete", expanded=False)
+                st.session_state.unified_report = _report
+
+        _rep = st.session_state.get("unified_report")
+        if _rep:
+            st.markdown("##### 통합 시작 결과")
+            if _rep.get("episodes"):
+                st.markdown("**등록된 확정 원고** — " + " · ".join(_rep["episodes"]))
+            st.markdown("\n".join(f"- {x}" for x in _rep.get("steps", [])))
+            if _rep.get("pending"):
+                with st.expander(f"작가 결정이 필요한 항목 {len(_rep['pending'])}개", expanded=True):
+                    st.markdown("\n".join(f"- {x}" for x in _rep["pending"]))
+            st.success(
+                "다음 단계 → 상단 **STEP 2 · BUILD-UP**의 ⓪ 세계관 바이블 탭에서 초안을 확인·수정한 뒤 "
+                "① Core Arc를 생성하세요."
+            )
+
+    # ── 서브탭 1: 기획서 업로드 ──
+    with sub_tabs_1[1]:
         st.caption("기획서 파일(DOCX/HWP/PDF/TXT/MD)을 업로드하면 컨셉 카드가 자동 생성됩니다.")
         uploaded = st.file_uploader(
             "기획서 파일을 올려주세요",
@@ -1024,6 +1336,7 @@ with tab1:
                         parsed, debug_info = safe_json(raw, debug=True)
                         if parsed:
                             st.session_state.concept_card = _coerce_concept_card(parsed)
+                            _stamp("concept_card")  # v2.10.0 기획서 버전 기록
                             st.success("✅ 컨셉 카드 생성 완료")
                             st.rerun()
                         else:
@@ -1073,6 +1386,7 @@ with tab1:
                             parsed_mb, dbg_mb = safe_json(raw_mb, debug=True)
                             if parsed_mb:
                                 st.session_state.martial_bible = parsed_mb
+                                _stamp("martial_bible")  # v2.10.0 기획서 버전 기록
                                 st.success("✅ 초식 바이블 추출 완료")
                                 st.rerun()
                             else:
@@ -1094,6 +1408,7 @@ with tab1:
                             parsed_sl, dbg_sl = safe_json(raw_sl, debug=True)
                             if parsed_sl:
                                 st.session_state.storyline_acts = parsed_sl
+                                _stamp("storyline_acts")  # v2.10.0 기획서 버전 기록
                                 st.success("✅ 스토리라인 추출 완료")
                                 st.rerun()
                             else:
@@ -1130,6 +1445,7 @@ with tab1:
                         if st.button("💾 초식 바이블 저장", key="save_martial_bible"):
                             try:
                                 st.session_state.martial_bible = json.loads(_mb_txt)
+                                _stamp("martial_bible")  # v2.10.0 기획서 버전 기록
                                 st.success("저장 완료")
                                 st.rerun()
                             except Exception as je:
@@ -1157,6 +1473,7 @@ with tab1:
                         if st.button("💾 스토리라인 저장", key="save_storyline"):
                             try:
                                 st.session_state.storyline_acts = json.loads(_sl_txt)
+                                _stamp("storyline_acts")  # v2.10.0 기획서 버전 기록
                                 st.success("저장 완료")
                                 st.rerun()
                             except Exception as je:
@@ -1165,7 +1482,7 @@ with tab1:
                 st.error(f"파일 읽기 실패: {e}")
 
     # ── 서브탭 2: 아이디어 생성 ──
-    with sub_tabs_1[1]:
+    with sub_tabs_1[2]:
         st.caption("자유 형식의 아이디어를 입력하면 자동으로 컨셉 카드가 만들어집니다.")
         idea = st.text_area(
             "작품 아이디어 (자유 형식)",
@@ -1195,6 +1512,7 @@ with tab1:
                 parsed = safe_json(raw)
                 if parsed:
                     st.session_state.concept_card = _coerce_concept_card(parsed)
+                    _stamp("concept_card")  # v2.10.0 기획서 버전 기록
                     st.success("✅ 컨셉 카드 생성 완료")
                     st.rerun()
                 else:
@@ -1203,7 +1521,7 @@ with tab1:
                         st.text(raw)
 
     # ── 서브탭 3: 직접 입력 (JSON 직접 편집) ──
-    with sub_tabs_1[2]:
+    with sub_tabs_1[3]:
         st.caption("컨셉 카드 JSON을 직접 입력하거나 편집하세요.")
         existing_json = json.dumps(st.session_state.concept_card, ensure_ascii=False, indent=2) if st.session_state.concept_card else "{}"
         manual_json = st.text_area(
@@ -1216,13 +1534,14 @@ with tab1:
             try:
                 parsed = json.loads(manual_json)
                 st.session_state.concept_card = _coerce_concept_card(parsed)
+                _stamp("concept_card")  # v2.10.0 기획서 버전 기록
                 st.success("✅ 컨셉 카드 저장 완료")
                 st.rerun()
             except json.JSONDecodeError as e:
                 st.error(f"JSON 파싱 오류: {e}")
 
     # ── 서브탭 4: IdeaSeed JSON (v2.0 신규) ──
-    with sub_tabs_1[3]:
+    with sub_tabs_1[4]:
         st.caption(
             "Claude Max 무협 스킬에서 생성한 IdeaSeed JSON을 업로드하면 "
             "v2.0 콘셉트 카드로 자동 변환됩니다."
@@ -1319,6 +1638,7 @@ with tab1:
                     parsed = safe_json(raw)
                     if parsed:
                         st.session_state.concept_card = _coerce_concept_card(parsed)
+                        _stamp("concept_card")  # v2.10.0 기획서 버전 기록
                         st.success("✅ IdeaSeed → 컨셉 카드 변환 완료")
                         st.balloons()
                         st.rerun()
@@ -1371,6 +1691,7 @@ with tab1:
             if st.button("💾 편집 내용 저장"):
                 try:
                     st.session_state.concept_card = _coerce_concept_card(json.loads(edited))
+                    _stamp("concept_card")  # v2.10.0 기획서 버전 기록
                     st.success("저장 완료")
                     st.rerun()
                 except json.JSONDecodeError as e:
@@ -1386,7 +1707,27 @@ with tab1:
                 parsed = safe_json(raw)
                 augmented = _coerce_concept_card(parsed)
                 if augmented:
+                    # v2.10.0: 원래 비어 있던 인물 이름 칸은 보강 결과에서 다시 비운다
+                    #   (이름 창작 이중 차단 — 원칙 M)
+                    for _role in ("protagonist", "female_lead", "male_lead", "villain", "mentor"):
+                        _o = cc.get(_role) if isinstance(cc.get(_role), dict) else {}
+                        _a = augmented.get(_role)
+                        if isinstance(_a, dict) and not str(_o.get("name") or "").strip():
+                            _a["name"] = ""
+                    _orig_names = {str(c.get("name") or "").strip()
+                                   for c in (cc.get("key_supporting_chars") or []) if isinstance(c, dict)}
+                    if isinstance(augmented.get("key_supporting_chars"), list):
+                        augmented["key_supporting_chars"] = [
+                            c for c in augmented["key_supporting_chars"]
+                            if isinstance(c, dict) and str(c.get("name") or "").strip() in _orig_names
+                        ]
+                    for _k in ("author_direction", "world_type", "fantasy_level", "fantasy_peak_level",
+                               "fantasy_peak_from_ep", "world_bible", "mentorship_ledger",
+                               "awakening_graph", "reference_diff"):
+                        if _k in cc and _k not in augmented:
+                            augmented[_k] = cc[_k]
                     st.session_state.concept_card = augmented
+                    _stamp("concept_card")  # v2.10.0 기획서 버전 기록
                     st.success("보강 완료")
                     st.rerun()
                 else:
@@ -1435,6 +1776,26 @@ with tab2:
             "⓪ 세계관 바이블을 먼저 확정한 뒤 ①②③을 순서대로 생성하면 "
             "STEP 3 집필로 넘어갈 수 있습니다. Extension Arc와 무공 대전은 선택 사항입니다."
         )
+
+        # v2.10.0: 기획서가 바뀐 뒤 이전 기획서로 만든 산출물이 남아 있으면 경고
+        _stale, _legacy = _stale_artifacts()
+        if _stale:
+            st.warning(
+                "⚠️ 기획서 또는 작가 방향 메모가 바뀐 뒤 갱신되지 않은 산출물: **"
+                + " · ".join(_stale) + "** — 이전 기획서 기준입니다. 다시 생성을 권장합니다."
+            )
+        if _legacy:
+            st.caption("버전 기록이 없는 산출물(v2.10.0 이전 생성): " + " · ".join(_legacy))
+        _uns_all = find_unsourced_characters(
+            st.session_state.character_bible, st.session_state.concept_card,
+            (st.session_state.brief_text or "") + "\n" + (st.session_state.author_direction or ""),
+        )
+        if _uns_all:
+            st.warning(
+                "⚠️ 기획서·작가 방향에 없는 인물: "
+                + ", ".join(f"{u['name']}({u['where']} · {u['role']})" for u in _uns_all)
+                + " — 엔진이 빈 칸을 채우려고 지어낸 인물일 수 있습니다."
+            )
 
         world_tab, build_tab1, build_tab2, build_tab3, build_tab4, build_tab5 = st.tabs([
             "⓪ 세계관 바이블 (권장)",
@@ -1591,9 +1952,89 @@ with tab2:
                     f"바이블 {sum(1 for v in _new.values() if v)}/{len(_fields)}"
                 )
 
-            with st.expander("집필 프롬프트에 전달되는 세계관·수위 블록 미리보기", expanded=False):
+            # ──── v2.10.0: 서사 장치 3종 ────
+            st.markdown("---")
+            st.markdown("##### 📐 서사 장치 — 사사 대장 · 그릇 각성 · 레퍼런스 차별")
+            st.caption(
+                "여러 스승에게 배우는 주인공, 원래 지닌 힘이 한 겹씩 드러나는 구조, 닮은 작품과의 "
+                "거리를 관리합니다. 표에 적은 내용이 Core Arc·플롯·본문 프롬프트에 들어가고, "
+                "STEP 3에서 예정보다 이른 사용·노출을 검사합니다. 비워 두면 해당 지시와 검사가 꺼집니다."
+            )
+            import pandas as _pd
+            _dv = st.session_state.get("dev_ver", 0)
+            _dev_edit = {}
+            for _dk, _spec in NARRATIVE_DEVICE_FIELDS.items():
+                _cols = [c for c, _l in _spec["columns"]]
+                _rows = []
+                for _r in (_cc.get(_dk) or []):
+                    if isinstance(_r, dict):
+                        _rows.append({
+                            c: (", ".join(str(x) for x in _r.get(c)) if isinstance(_r.get(c), list)
+                                else str(_r.get(c) or ""))
+                            for c in _cols
+                        })
+                st.markdown(f"**{_spec['label']}**")
+                _dev_edit[_dk] = st.data_editor(
+                    _pd.DataFrame(_rows, columns=_cols),
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key=f"dev_{_dk}_{_dv}",
+                    column_config={c: st.column_config.TextColumn(lb) for c, lb in _spec["columns"]},
+                )
+
+            _dc1, _dc2 = st.columns(2)
+            with _dc1:
+                if st.button("📄 기획서·작가 메모에서 초안 (빈 표만)", use_container_width=True,
+                             key="dev_draft_btn",
+                             disabled=not (st.session_state.brief_text or st.session_state.author_direction)):
+                    with st.spinner("서사 장치 초안 추출 중..."):
+                        _p = safe_json(call_claude(
+                            build_narrative_devices_prompt(
+                                st.session_state.brief_text, _cc,
+                                st.session_state.author_direction,
+                                build_canon_excerpt(_canon_episodes()),
+                            ),
+                            max_tokens=MAX_TOKENS_STRUCTURE,
+                        ))
+                        if isinstance(_p, dict):
+                            _n_added = 0
+                            for _dk in NARRATIVE_DEVICE_FIELDS:
+                                _rows = [r for r in (_p.get(_dk) or []) if isinstance(r, dict)
+                                         and any(str(v or "").strip() for v in r.values())]
+                                if _rows and not _cc.get(_dk):
+                                    _cc[_dk] = _rows
+                                    _n_added += 1
+                            st.session_state.concept_card = _cc
+                            st.session_state["dev_pending"] = [x for x in (_p.get("pending") or []) if isinstance(x, str)]
+                            st.session_state.dev_ver = _dv + 1
+                            st.success(f"초안으로 빈 표 {_n_added}개를 채웠습니다. 이미 입력된 표는 덮어쓰지 않습니다.")
+                            st.rerun()
+                        else:
+                            st.error("초안 생성 실패 — 응답을 JSON으로 해석하지 못했습니다.")
+            with _dc2:
+                if st.button("💾 서사 장치 저장", type="primary", use_container_width=True, key="dev_save_btn"):
+                    for _dk, _df in _dev_edit.items():
+                        _recs = []
+                        for _r in _df.fillna("").to_dict("records"):
+                            _r = {k: str(v).strip() for k, v in _r.items()}
+                            if not any(_r.values()):
+                                continue
+                            if "keywords" in _r:
+                                _r["keywords"] = [k.strip() for k in _r["keywords"].replace("，", ",").split(",") if k.strip()]
+                            _recs.append(_r)
+                        _cc[_dk] = _recs
+                    st.session_state.concept_card = _cc
+                    st.session_state.dev_ver = _dv + 1
+                    st.success("✅ 서사 장치 저장 완료")
+                    st.rerun()
+            if st.session_state.get("dev_pending"):
+                with st.expander(f"서사 장치 — 작가 결정이 필요한 항목 {len(st.session_state['dev_pending'])}개", expanded=False):
+                    st.markdown("\n".join(f"- {x}" for x in st.session_state["dev_pending"]))
+
+            with st.expander("집필 프롬프트에 전달되는 세계관·수위·서사 장치 블록 미리보기", expanded=False):
                 st.markdown(build_world_bible_block(_cc))
                 st.markdown(build_fantasy_level_block(_cc, 1))
+                st.markdown(build_narrative_device_block(_cc, 0) or "(서사 장치 없음)")
 
         # ──── Core Arc ────
         with build_tab1:
@@ -1627,12 +2068,14 @@ with tab2:
                             style_strength=st.session_state.style_strength,
                             storyline_acts=st.session_state.storyline_acts,
                             martial_bible=st.session_state.martial_bible,
+                            canon_excerpt=build_canon_excerpt(_canon_episodes()),  # v2.10.0
                         ),
                         max_tokens=MAX_TOKENS_ARC,
                     )
                     parsed, parse_info = safe_json(raw, debug=True)
                     if parsed and isinstance(parsed, list) and len(parsed) > 0:
                         st.session_state.core_arc = parsed
+                        _stamp("core_arc")  # v2.10.0 기획서 버전 기록
                         if len(parsed) < core_eps:
                             st.warning(
                                 f"⚠️ {len(parsed)}화만 생성되었습니다 (요청: {core_eps}화). "
@@ -1751,6 +2194,7 @@ with tab2:
                         if parsed:
                             if arc_type == "core":
                                 st.session_state.plant_map_core = parsed
+                                _stamp("plant_map_core")  # v2.10.0 기획서 버전 기록
                             else:
                                 st.session_state.plant_map_extension = parsed
                             st.success("✅ 떡밥 맵 생성 완료")
@@ -1798,7 +2242,18 @@ with tab2:
                     parsed = safe_json(raw)
                     if parsed:
                         st.session_state.character_bible = parsed
+                        _stamp("character_bible")  # v2.10.0 기획서 버전 기록
                         st.success("✅ 캐릭터 바이블 생성 완료")
+                        _uns = find_unsourced_characters(
+                            parsed, st.session_state.concept_card,
+                            (st.session_state.brief_text or "") + "\n" + (st.session_state.author_direction or ""),
+                        )
+                        if _uns:
+                            st.warning(
+                                "⚠️ 기획서·작가 방향에 없는 인물이 바이블에 들어갔습니다: "
+                                + ", ".join(f"{u['name']}({u['role']})" for u in _uns)
+                                + " — 엔진이 지어낸 인물일 수 있습니다. 확인 후 삭제하거나 작가 방향 메모에 추가해 주세요."
+                            )
                     else:
                         st.error("❌ 생성 실패")
 
@@ -2036,6 +2491,33 @@ with tab3:
                 horizontal=True,
                 index=1 if st.session_state.concept_card.get("target_rating") == "19금" else 0,
             )
+
+            # ──── v2.10.0: 작가 원고 불러오기 ────
+            _meta_ep = (st.session_state.episode_meta or {}).get(selected_ep) or {}
+            _imp_label = f"📥 EP{selected_ep} 작가 원고 불러오기 (DOCX/TXT/MD)"
+            if _meta_ep.get("source") == "author":
+                _imp_label += f" — 현재 작가 원고 ({_meta_ep.get('file', '')})"
+            with st.expander(_imp_label, expanded=False):
+                st.caption(
+                    "작가가 쓰거나 고친 원고를 이 회차 본문으로 등록합니다. 기존 본문은 교체되고, "
+                    "이 회차의 요약·검수 결과는 지워집니다. 등록 후 ⑥ 회차 요약을 다시 만들어야 "
+                    "다음 회차 플롯에 반영됩니다."
+                )
+                _imp = st.file_uploader("원고 파일", type=["docx", "txt", "md"],
+                                        key=f"ep_import_{selected_ep}")
+                if _imp is not None and st.button(f"EP{selected_ep} 본문으로 등록 ({rating})",
+                                                  key=f"ep_import_btn_{selected_ep}"):
+                    _t = parse_brief(_imp)
+                    _slot = "episodes_19" if rating == "19금" else "episodes_15"
+                    st.session_state[_slot][selected_ep] = _t
+                    _m = dict(st.session_state.episode_meta or {})
+                    _m[selected_ep] = {"source": "author", "file": _imp.name,
+                                       "imported_at": datetime.now().isoformat(timespec="seconds")}
+                    st.session_state.episode_meta = _m
+                    st.session_state.episode_summaries.pop(selected_ep, None)
+                    st.session_state.validation_results.pop(selected_ep, None)
+                    st.success(f"✅ EP{selected_ep} 작가 원고 등록 ({len(_t):,}자). ⑥ 회차 요약을 다시 만들어 주세요.")
+                    st.rerun()
 
             # ──── 진행 순서 안내 (v2.7.1 — 첫 사용자 기준 직관화) ────
             # 버튼이 화면 여러 곳에 흩어져 있어 처음 쓰는 사람이 다음에
@@ -2319,6 +2801,18 @@ with tab3:
                 with st.expander(w_label, expanded=not world_scan["clean"]):
                     st.markdown(format_world_consistency_report(world_scan, ep_number=selected_ep))
 
+                # ──── 서사 장치 연속성 (v2.10.0 — 사사 대장·그릇 각성, 정적 검출) ────
+                dev_scan = scan_device_continuity(
+                    current_ep, st.session_state.concept_card, ep_number=selected_ep,
+                )
+                if dev_scan.get("has_devices"):
+                    _dv_label = (
+                        "📐 서사 장치 연속성 — ✅ 통과" if dev_scan["clean"]
+                        else "📐 서사 장치 연속성 — ⚠️ " + " / ".join(dev_scan["flags"])
+                    )
+                    with st.expander(_dv_label, expanded=not dev_scan["clean"]):
+                        st.markdown(format_device_continuity_report(dev_scan, ep_number=selected_ep))
+
                 # ──── 초식 일관성 검사 (v2.5.0 — 정적 검출, API 미사용) ────
                 martial_scan = scan_martial_consistency(
                     current_ep,
@@ -2442,6 +2936,14 @@ with tab3:
                                 if not redo_world["clean"]:
                                     redo_parts.append(
                                         format_world_consistency_report(redo_world, ep_number=selected_ep)
+                                    )
+                                # v2.10.0: 서사 장치 연속성 검출 결과도 주입
+                                redo_dev = scan_device_continuity(
+                                    current_ep, st.session_state.concept_card, ep_number=selected_ep,
+                                )
+                                if redo_dev.get("has_devices") and not redo_dev["clean"]:
+                                    redo_parts.append(
+                                        format_device_continuity_report(redo_dev, ep_number=selected_ep)
                                     )
                                 # v2.5.0: 초식 일관성 검출 결과도 함께 주입
                                 redo_martial = scan_martial_consistency(
@@ -2571,7 +3073,7 @@ with tab3:
                         with st.spinner("요약 중..."):
                             summary = call_claude(
                                 build_episode_summary_prompt(current_ep, selected_ep),
-                                max_tokens=1000,
+                                max_tokens=MAX_TOKENS_SMALL,
                             )
                             st.session_state.episode_summaries[selected_ep] = summary
                             st.success("✅ 요약 완료")
@@ -2687,7 +3189,7 @@ with tab3:
                                     current_ep, persona_choice,
                                     st.session_state.concept_card.get("genre", ""),
                                 ),
-                                max_tokens=2000,
+                                max_tokens=MAX_TOKENS_SMALL,
                             )
                             st.markdown(feedback)
 

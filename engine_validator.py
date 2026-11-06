@@ -1,10 +1,20 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.9.0 — engine_validator.py
+👖 BLUE JEANS WUXIA ENGINE v2.10.0 — engine_validator.py
 ═══════════════════════════════════════════════════════════
 회차 자가 검수 · 재료 활용 검증 · 전환점 자동 감지 · 문체 정적 스캐너
 · 초식 일관성 정적 검사 · 장르 밀도 정적 검사
 
 [변경 이력]
+v2.10.0 (2026-11-07) — 서사 장치 연속성 · 출처 없는 인물 검출 · 인물명 오검출 수정
+  · [사고 패턴 I 재발] scan_wuxia_density의 무공명 검출이 한자 병기 인명
+    (김경수(金炅洙)·서아(徐雅) 등)을 무공으로 셌다. 아미고 EP002 실측 12종 중
+    4종이 인명 → 실제 8종. _person_names()로 컨셉 카드 인물명을 제외한다
+  · scan_device_continuity() / format_device_continuity_report() 신설
+      사사 대장 — 주인공이 예정 회차 전에 그 무공을 쓰는 문장 검출
+      그릇 각성 — 예정 회차 전에 검출 단어가 나오는 문장 검출
+  · find_unsourced_characters() 신설 — 캐릭터 바이블 인물 중 컨셉 카드·
+    작가 방향·기획서 어디에도 없는 이름 (엔진이 지어낸 인물, 원칙 M)
+  · 원칙 K 유지 — 전부 검출만 한다
 v2.9.0 (2026-11-06) — 세계 유형 · 판타지 수위 연동 (World Type Pack)
   · scan_wuxia_density(concept_card=) 인자 추가 — 판타지 수위별 쿼터 프로필
     (WUXIA_DENSITY_PROFILES · get_density_quotas). 수위 2~3은 기존 A29 그대로,
@@ -2073,6 +2083,11 @@ def scan_wuxia_density(text: str, ep_number: int = 0,
 
     # ── ① 이름 붙은 무공 ──
     named = _extract_named_arts(text, terms.get("arts"))
+    # v2.10.0: 인물 이름을 무공으로 세지 않는다 (김경수(金炅洙) 같은 한자 병기 인명)
+    _persons = _person_names(concept_card)
+    if _persons:
+        named = [n for n in named
+                 if re.sub(r"\s*\([^)]*\)\s*", "", n).strip() not in _persons]
     if world == "조선_역사":
         # 긴 이름부터 확인 — "마상쌍검" 안의 "쌍검"을 중복으로 세지 않는다
         _rest = text
@@ -2268,6 +2283,176 @@ def format_wuxia_density_report(scan: dict, ep_number: int = 0) -> str:
                 lines.append(f"    · `{s}`")
 
     lines.append("\n> 검사는 검출만 합니다. 수정 여부와 방식은 작가의 판단입니다.")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════
+# v2.10.0 — 인물명 수집 · 서사 장치 연속성 · 출처 없는 인물 검출
+# ═══════════════════════════════════════════════════════════
+_NAME_TITLES = ("감찰관", "교사", "교장", "이사장", "선생님", "선생", "스님", "사부", "대사")
+
+
+def _strip_name(n) -> str:
+    """'감찰관 서정록 (徐正祿)' → '서정록', '혜성(慧星)스님' → '혜성'."""
+    n = re.sub(r"\s*[\(（][^)）]*[\)）]\s*", " ", str(n or ""))
+    n = re.sub(r"\s+", " ", n).strip()
+    changed = True
+    while changed:
+        changed = False
+        for t in _NAME_TITLES:
+            if n.startswith(t + " ") or (n.startswith(t) and len(n) > len(t) + 1 and n[len(t)] == " "):
+                n = n[len(t):].strip(); changed = True
+            elif n.endswith(t) and len(n) > len(t) + 1:
+                n = n[: -len(t)].strip(); changed = True
+    return n.replace(" ", "")
+
+
+def _person_names(concept_card=None, character_bible=None) -> set:
+    """컨셉 카드(·캐릭터 바이블)에 등장하는 인물 이름 집합 — 한자 병기·직함 제거."""
+    names = set()
+    cc = concept_card if isinstance(concept_card, dict) else {}
+    for role in ("protagonist", "female_lead", "male_lead", "villain", "mentor"):
+        v = cc.get(role)
+        if isinstance(v, dict) and v.get("name"):
+            names.add(_strip_name(v["name"]))
+    for ch in cc.get("key_supporting_chars") or []:
+        if isinstance(ch, dict) and ch.get("name"):
+            names.add(_strip_name(ch["name"]))
+    cb = character_bible if isinstance(character_bible, dict) else {}
+    for role, v in cb.items():
+        items = v if isinstance(v, list) else [v]
+        for it in items:
+            if isinstance(it, dict) and it.get("name"):
+                names.add(_strip_name(it["name"]))
+    out = set()
+    for n in names:
+        if len(n) >= 2:
+            out.add(n)
+            if len(n) == 3:          # 김지훈 → 지훈 (성 뺀 이름도 인정)
+                out.add(n[1:])
+    return out
+
+
+def find_unsourced_characters(character_bible: dict, concept_card: dict = None,
+                              sources_text: str = "") -> list:
+    """컨셉 카드·캐릭터 바이블의 인물 중 기획서·작가 방향 어디에도 없는 이름.
+
+    엔진이 빈 역할 칸을 채우려고 지어낸 인물을 잡는다 (원칙 M).
+    컨셉 카드도 엔진 생성물이므로 출처로 믿지 않는다 — 출처는 기획서와
+    작가 방향 메모뿐이다. sources_text가 비어 있으면 검사하지 않는다.
+    Returns: [{"where": "컨셉 카드"|"캐릭터 바이블", "role", "name"}]
+    """
+    cc = concept_card if isinstance(concept_card, dict) else {}
+    pool = ((sources_text or "") + "\n" + str(cc.get("author_direction") or "")).replace(" ", "")
+    if len(pool.strip()) < 50:
+        return []
+
+    def _ok(nm):
+        return nm in pool or (len(nm) == 3 and nm[1:] in pool)
+
+    out, seen = [], set()
+
+    def _scan(where, role, it):
+        if not isinstance(it, dict) or it.get("_pending"):
+            return
+        raw = str(it.get("name") or "").strip()
+        nm = _strip_name(raw)
+        if len(nm) < 2 or _ok(nm) or (where, nm) in seen:
+            return
+        seen.add((where, nm))
+        out.append({"where": where, "role": role, "name": raw})
+
+    for role in ("protagonist", "female_lead", "male_lead", "villain", "mentor"):
+        _scan("컨셉 카드", role, cc.get(role))
+    for ch in cc.get("key_supporting_chars") or []:
+        _scan("컨셉 카드", "key_supporting_chars", ch)
+    cb = character_bible if isinstance(character_bible, dict) else {}
+    for role, v in cb.items():
+        for it in (v if isinstance(v, list) else [v]):
+            _scan("캐릭터 바이블", role, it)
+    return out
+
+
+def _device_ep(row) -> int:
+    try:
+        return int(str(row.get("ep", "")).strip().split("~")[0].split("-")[0])
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
+def scan_device_continuity(text: str, concept_card: dict = None,
+                           ep_number: int = 0) -> dict:
+    """서사 장치 연속성 검사 — v2.10.0 신규 (원칙 K: 검출만).
+
+    ① 사사 대장: 주인공이 아직 배우지 않은 무공을 쓰는 문장
+       (주인공 이름과 무공명이 같은 문장에 함께 있을 때)
+    ② 그릇 각성: 예정 회차 전에 드러난 겹 (검출 단어 기준)
+    """
+    cc = concept_card if isinstance(concept_card, dict) else {}
+    res = {"early_arts": [], "early_layers": [], "flags": [], "clean": True,
+           "has_devices": False}
+    led = [r for r in (cc.get("mentorship_ledger") or []) if isinstance(r, dict)]
+    awk = [r for r in (cc.get("awakening_graph") or []) if isinstance(r, dict)]
+    res["has_devices"] = bool(led or awk)
+    if not text or not ep_number or not res["has_devices"]:
+        return res
+
+    p = cc.get("protagonist") if isinstance(cc.get("protagonist"), dict) else {}
+    pname = _strip_name(p.get("name", ""))
+    aliases = {pname} | ({pname[1:]} if len(pname) == 3 else set())
+    aliases = {a for a in aliases if len(a) >= 2}
+    sents = re.split(r"(?<=[.!?。…”’])\s+|\n", text)
+
+    for r in led:
+        e = _device_ep(r)
+        art = re.sub(r"\s*\([^)]*\)\s*", "", str(r.get("art") or "")).strip()
+        if not art or len(art) < 2 or not e or e <= ep_number:
+            continue
+        hits = [s.strip()[:90] for s in sents
+                if art in s and any(a in s for a in aliases)]
+        if hits:
+            res["early_arts"].append({"art": art, "mentor": r.get("mentor", ""),
+                                      "planned_ep": e, "samples": hits[:2]})
+
+    for r in awk:
+        e = _device_ep(r)
+        if not e or e <= ep_number:
+            continue
+        kws = r.get("keywords") or []
+        if isinstance(kws, str):
+            kws = [k.strip() for k in re.split(r"[,，/·]", kws)]
+        kws = [k for k in kws if isinstance(k, str) and len(k.strip()) >= 2]
+        found = [k for k in kws if k in text]
+        if found:
+            res["early_layers"].append({
+                "layer": r.get("layer", ""), "planned_ep": e, "keywords": found,
+                "samples": [s.strip()[:90] for s in sents if any(k in s for k in found)][:2],
+            })
+
+    if res["early_arts"]:
+        res["flags"].append(f"사사 대장 — 아직 배우지 않은 무공 사용 의심 {len(res['early_arts'])}건")
+    if res["early_layers"]:
+        res["flags"].append(f"그릇 각성 — 예정보다 이른 노출 {len(res['early_layers'])}건")
+    res["clean"] = not res["flags"]
+    return res
+
+
+def format_device_continuity_report(scan: dict, ep_number: int = 0) -> str:
+    if not scan or not scan.get("has_devices"):
+        return "서사 장치(사사 대장·그릇 각성)가 아직 입력되지 않았습니다. STEP 2 ⓪ 탭에서 입력하면 검사가 켜집니다."
+    icon = "✅" if scan.get("clean") else "⚠️"
+    lines = [f"### {icon} 서사 장치 연속성" + (f" — EP{ep_number}" if ep_number else "")]
+    if scan.get("clean"):
+        lines.append("\n예정보다 이른 무공 사용·각성 노출이 검출되지 않았습니다.")
+    for a in scan.get("early_arts", []):
+        lines.append(f"\n- 사사 대장 · {a['mentor']}의 **{a['art']}** (EP{a['planned_ep']} 전수 예정)")
+        for smp in a.get("samples", []):
+            lines.append(f"    · `{smp}`")
+    for l in scan.get("early_layers", []):
+        lines.append(f"\n- 그릇 각성 · **{l['layer']}** (EP{l['planned_ep']} 예정) — {', '.join(l['keywords'])}")
+        for smp in l.get("samples", []):
+            lines.append(f"    · `{smp}`")
+    lines.append("\n> 암시·예고 장면이면 의도된 것일 수 있습니다. 검출만 하며 판단은 작가의 몫입니다.")
     return "\n".join(lines)
 
 
