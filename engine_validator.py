@@ -2961,6 +2961,199 @@ def format_codex_merge_report(result: dict, faction: str = "") -> str:
     return "\n".join(lines)
 
 
+# ═══════════════════════════════════════════════════
+# v2.12.0 — 최고의 무협 기준표 판정 (객관 · 점수 없음)
+# ───────────────────────────────────────────────────
+# 판정관(LLM)은 근거 문장만 낸다. 충족/미달/누락은 여기서 코드가 정한다.
+#   - 인용이 비었다            → 누락 (그 요소가 본문에 없다)
+#   - 인용이 본문에 없다        → 미달 (근거 무효 — 판정관이 지어낸 문장)
+#   - 위치 조건(첫/끝 15%) 위반 → 미달
+#   - 필수 항목이 하나라도 미달·누락 → 기준 미달
+# ═══════════════════════════════════════════════════
+
+_HANJA_PAREN_RE = re.compile(r"[가-힣A-Za-z0-9]+\s?\([\u4e00-\u9fff][\u4e00-\u9fff·\s]*\)")
+_STD_POS_WINDOW = 0.15
+_STD_MIN_QUOTE = 8   # 정규화 후 최소 글자 수
+
+
+def _std_norm(t: str) -> Tuple[str, List[int]]:
+    """한글·영문·숫자·한자만 남긴다. 원문 위치 대응표도 함께 돌려준다."""
+    out, pos = [], []
+    for i, ch in enumerate(t or ""):
+        if re.match(r"[가-힣A-Za-z0-9\u4e00-\u9fff]", ch):
+            out.append(ch)
+            pos.append(i)
+    return "".join(out), pos
+
+
+def _std_locate(quote: str, text: str, _cache: dict = None) -> Optional[float]:
+    """인용이 본문에 있으면 상대 위치(0~1), 없으면 None. 생략부호가 있으면 가장 긴 조각으로 찾는다."""
+    if not quote or not text:
+        return None
+    parts = [x for x in re.split(r"…|\.\.\.", quote) if x.strip()]
+    if not parts:
+        return None
+    q = max(parts, key=len)
+    nq, _ = _std_norm(q)
+    if len(nq) < _STD_MIN_QUOTE:
+        return None
+    if _cache is not None and "n" in _cache:
+        nt, pos = _cache["n"], _cache["pos"]
+    else:
+        nt, pos = _std_norm(text)
+        if _cache is not None:
+            _cache["n"], _cache["pos"] = nt, pos
+    idx = nt.find(nq)
+    if idx < 0:
+        return None
+    return pos[idx] / max(1, len(text))
+
+
+def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
+                              concept_card=None, platform: str = "문피아",
+                              episode_plot=None) -> dict:
+    """회차 기준표 판정.
+
+    Returns:
+        {"verdict": "기준 충족" | "기준 미달", "fail_ids": [...],
+         "rows": [{"id","name","need","axis","status","detail","quote"}],
+         "text_sig": int, "ep": int}
+        status: 충족 / 미달 / 누락 / 해당 없음 / 판정 불가
+    """
+    from prompt import (standard_items_for, standard_hanja_limit,
+                        get_platform_length)
+    text = text or ""
+    plot = episode_plot if isinstance(episode_plot, dict) else {}
+    scenes = [sc for sc in (plot.get("scenes") or []) if isinstance(sc, dict)]
+    items = standard_items_for(concept_card, has_plot=bool(scenes))
+    llm = llm_result if isinstance(llm_result, dict) else {}
+    llm_items = llm.get("items") if isinstance(llm.get("items"), dict) else {}
+    have_llm = bool(llm_items) or bool(llm.get("P1")) or "K1" in llm
+    cache = {}
+    rows = []
+
+    def row(it, status, detail="", quote=""):
+        rows.append({"id": it["id"], "name": it["name"], "need": it["need"], "axis": it["axis"],
+                     "status": status, "detail": detail, "quote": quote})
+
+    for it in items:
+        iid, chk = it["id"], it["check"]
+        if iid == "L1":
+            plen = get_platform_length(platform)
+            n = len(text)
+            ok = plen["min"] <= n <= plen["max"]
+            row(it, "충족" if ok else "미달",
+                f"{n:,}자 (기준 {plen['min']:,}~{plen['max']:,}자)")
+            continue
+        if iid == "H2":
+            lim = standard_hanja_limit(concept_card, ep_number)
+            n = len(_HANJA_PAREN_RE.findall(text))
+            row(it, "충족" if n <= lim else "미달", f"{n}회 (상한 {lim}회)")
+            continue
+        if not have_llm:
+            row(it, "판정 불가", "판정관 응답 없음")
+            continue
+        if chk == "beats":
+            got = {}
+            for b in (llm.get("P1") or []):
+                if isinstance(b, dict):
+                    got[str(b.get("scene_no"))] = str(b.get("quote") or "")
+            missing, invalid = [], []
+            for i, sc in enumerate(scenes):
+                no = str(sc.get("scene_no", i + 1))
+                q = got.get(no, "")
+                if not q.strip():
+                    missing.append(no)
+                elif _std_locate(q, text, cache) is None:
+                    invalid.append(no)
+            if not missing and not invalid:
+                row(it, "충족", f"씬 {len(scenes)}개 모두 본문에 있음")
+            else:
+                d = []
+                if missing:
+                    d.append("본문에 없는 씬: " + ", ".join(missing))
+                if invalid:
+                    d.append("근거가 본문에 없는 씬: " + ", ".join(invalid))
+                row(it, "누락" if missing else "미달", " / ".join(d))
+            continue
+        if chk == "violation":
+            found = []
+            for v in (llm.get("K1") or []):
+                if not isinstance(v, dict):
+                    continue
+                q = str(v.get("quote") or "")
+                if q.strip() and _std_locate(q, text, cache) is not None:
+                    found.append((q, str(v.get("conflicts_with") or "")))
+            if not found:
+                row(it, "충족", "어긋나는 문장 없음")
+            else:
+                row(it, "미달", " / ".join(f"↔ {c}" for _, c in found)[:400],
+                    " | ".join(q for q, _ in found)[:400])
+            continue
+        # quote / quote_first / quote_last
+        d = llm_items.get(iid) if isinstance(llm_items.get(iid), dict) else {}
+        if iid == "S1" and d.get("applicable") is False:
+            row(it, "해당 없음", "이번 화에 경쟁·시험 장면 없음")
+            continue
+        q = str(d.get("quote") or "")
+        if not q.strip():
+            row(it, "누락", "근거 문장 없음 — 이 요소가 본문에 없다")
+            continue
+        where = _std_locate(q, text, cache)
+        if where is None:
+            row(it, "미달", "인용한 문장이 본문에 없음 (근거 무효)", q)
+            continue
+        if chk == "quote_first" and where > _STD_POS_WINDOW:
+            row(it, "미달", f"근거 문장이 본문 {where:.0%} 지점 — 첫 15% 밖", q)
+            continue
+        if chk == "quote_last" and where < 1 - _STD_POS_WINDOW - 0.02:
+            row(it, "미달", f"근거 문장이 본문 {where:.0%} 지점 — 마지막 15% 밖", q)
+            continue
+        row(it, "충족", f"본문 {where:.0%} 지점", q)
+
+    fail = [r["id"] for r in rows if r["need"] == "필수" and r["status"] in ("미달", "누락")]
+    undecided = [r["id"] for r in rows if r["need"] == "필수" and r["status"] == "판정 불가"]
+    if fail:
+        verdict = "기준 미달"
+    elif undecided:
+        verdict = "판정 보류"
+    else:
+        verdict = "기준 충족"
+    return {"verdict": verdict, "fail_ids": fail, "rows": rows,
+            "text_sig": standard_text_sig(text), "ep": int(ep_number or 0)}
+
+
+def standard_text_sig(text: str) -> int:
+    """본문이 바뀌었는지 확인하는 서명 (결정적 — 세션 간 동일)."""
+    import zlib
+    return zlib.crc32((text or "").encode("utf-8"))
+
+
+def format_standard_report(result: dict, ep_number: int = 0, for_redo: bool = False) -> str:
+    """기준표 판정 리포트 (마크다운). for_redo=True면 미달·누락만, 재집필 지시 형태로."""
+    if not isinstance(result, dict) or not result.get("rows"):
+        return ""
+    rows = result["rows"]
+    bad = [r for r in rows if r["status"] in ("미달", "누락")]
+    if for_redo:
+        if not bad:
+            return ""
+        out = [f"## 📏 기준표 미달 항목 (EP{ep_number}) — 재집필에서 반드시 채울 것"]
+        for r in bad:
+            out.append(f"- [{r['need']}] {r['id']} {r['name']} — {r['status']}: {r['detail']}")
+        return "\n".join(out)
+    mark = {"충족": "✅", "미달": "⚠️", "누락": "❌", "해당 없음": "➖", "판정 불가": "❔"}
+    out = [f"**EP{ep_number} 기준표 — {result.get('verdict', '')}**"
+           + (f" (필수 미달·누락: {', '.join(result['fail_ids'])})" if result.get("fail_ids") else ""),
+           "", "| 항목 | 구분 | 판정 | 내용 |", "|---|---|---|---|"]
+    for r in rows:
+        det = (r["detail"] or "").replace("|", "/")
+        if r.get("quote"):
+            det += f" — 「{r['quote'][:70].replace('|', '/')}」"
+        out.append(f"| {r['id']} {r['name']} | {r['need']} | {mark.get(r['status'], '')} {r['status']} | {det} |")
+    return "\n".join(out)
+
+
 def _self_test():
     """모듈 자체 검증."""
     print("=== engine_validator.py 자가 테스트 ===")

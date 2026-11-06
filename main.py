@@ -1,9 +1,24 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.11.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.0 (2026-11-07) — 최고의 무협 기준표 (객관 판정) · 작가 원고 = 기준점
+  · [작가 요청] "채점의 기준은 객관적이야. 부족한 요소. 기준미달." /
+    "회별로 끊어서 간다. 버튼은 내가 누른다." — 자동 연속 집필은 만들지 않는다
+  · STEP 3 📏 최고의 무협 기준표 패널 (서사 장치 연속성 다음)
+      — 버튼 하나로 판정: 필수 8 · 조건부 1(경쟁 규칙) · 권장 2. 결과는 충족/미달/누락/해당 없음
+      — 판정관은 Sonnet(집필 Opus와 분리), 인용 대조·위치 확인은 코드
+      — 본문이 바뀌면 "다시 판정 필요" 표시 (본문 서명 비교)
+      — 기준 미달 항목은 REDO 재집필 지시에 자동 포함
+  · 작가 원고 = 기준점 — 📥 원고 불러오기의 기본 동작을 '기준점으로 등록'으로 변경.
+    엔진 본문은 그대로 두고 같은 기준표로 나란히 판정, "작가 원고는 충족 · 엔진은 미달"
+    항목을 표시. 본문으로 등록하는 기존 기능은 두 번째 버튼으로 유지
+  · STEP 1 통합 시작의 원고 파일도 기준점으로 등록 (본문 슬롯에 넣지 않음).
+    기준점 원고는 참고 발췌로 기획 프롬프트에 들어간다
+  · 정본 기획서 표시 [확정·원고] → [참고·원고]
+  · 백업에 standard_results · benchmarks · benchmark_results 포함
 v2.11.0 (2026-11-07) — Strength Picker (정본 기획서 하나 → 진단 → 채택)
   · [작가 요청] "파일 하나로 작성하고, 엔진은 그 파일을 파악해서 장점만 당겨오게.
     지금 기획서가 100점 만점이 아니잖아." v2.10.0의 통합 시작은 입력 칸이
@@ -344,6 +359,8 @@ from prompt import (
     # v2.10.0 신규 — 통합 시작 · 서사 장치
     build_author_direction_block,
     build_canon_excerpt,
+    # v2.12.0 신규 — 최고의 무협 기준표
+    build_standard_check_prompt,
     build_narrative_devices_prompt,
     build_narrative_device_block,
     NARRATIVE_DEVICE_FIELDS,
@@ -393,6 +410,9 @@ from engine_validator import (
     scan_device_continuity,         # v2.10.0 신규
     format_device_continuity_report,  # v2.10.0 신규
     find_unsourced_characters,      # v2.10.0 신규
+    evaluate_episode_standard,      # v2.12.0 신규
+    format_standard_report,         # v2.12.0 신규
+    standard_text_sig,              # v2.12.0 신규
 )
 
 
@@ -842,6 +862,10 @@ defaults = {
     "brief_diagnosis": None,       # {"rows": [...], "overall": str, "brief_sig": str}
     "adoption_block": "",          # 작가가 고른 채택표 → 최우선 지시
     "dev_ver": 0,                  # 서사 장치 편집표 갱신 카운터
+    # v2.12.0 기준표 · 기준점 원고
+    "standard_results": {},        # {ep: 엔진 본문 기준표 판정}
+    "benchmarks": {},              # {ep: {"text", "file", "imported_at"}} — 작가 원고(비교용)
+    "benchmark_results": {},       # {ep: 작가 원고 기준표 판정}
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -881,6 +905,8 @@ PROJECT_KEYS = [
     "author_direction", "episode_meta", "artifact_sigs",
     # v2.11.0: 진단 결과와 채택표
     "brief_diagnosis", "adoption_block",
+    # v2.12.0: 기준표 판정 · 기준점 원고
+    "standard_results", "benchmarks", "benchmark_results",
 ]
 
 
@@ -1008,6 +1034,14 @@ def _canon_episodes():
     pool.update({k: v for k, v in (st.session_state.get("episodes_19") or {}).items() if v})
     authored = {k: v for k, v in pool.items()
                 if (meta.get(k) or meta.get(str(k)) or {}).get("source") == "author"}
+    # v2.12.0: 기준점(비교용) 작가 원고도 참고 발췌에 넣는다
+    for k, b in (st.session_state.get("benchmarks") or {}).items():
+        try:
+            k = int(k)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(b, dict) and b.get("text") and k not in authored:
+            authored[k] = b["text"]
     return authored or {}
 
 
@@ -1042,6 +1076,7 @@ EPISODE_KEYED_KEYS = [
     "episode_plots", "episodes_19", "episodes_15",
     "episode_summaries", "quality_reports", "validation_results",
     "episode_meta",   # v2.10.0
+    "standard_results", "benchmarks", "benchmark_results",   # v2.12.0
 ]
 
 
@@ -1136,7 +1171,7 @@ with tab1:
         )
         st.caption(
             "줄 앞에 표시를 붙이면 진단 없이 그대로 따릅니다 — "
-            "**[확정]** 그대로 채택 · **[검토]** 작가 결정 · **[미정]** 비워 둠 · **[확정·원고]** 원고에 쓰인 사실. "
+            "**[확정]** 그대로 채택 · **[검토]** 작가 결정 · **[미정]** 비워 둠 · **[참고·원고]** 작가 원고 속 장면 (예시 — 더 나은 설계면 바뀔 수 있음). "
             "'작가 방향' 섹션은 자동으로 최우선 지시가 됩니다."
         )
         _u_brief = st.file_uploader(
@@ -1157,15 +1192,15 @@ with tab1:
         _brief = st.session_state.brief_text or ""
         if _brief:
             _tg, _untag, _dsec = parse_tagged_brief(_brief)
-            _cnt = {k: sum(1 for x in _tg if x["tag"] == k) for k in ("확정", "확정·원고", "검토", "미정")}
+            _cnt = {k: sum(1 for x in _tg if x["tag"] == k) for k in ("확정", "참고·원고", "검토", "미정")}
             _secs = extract_brief_sections(_brief)
             st.caption(
                 f"기획서 {len(_brief):,}자 · 섹션 {len([k for k in _secs if k != 'other'])}개 · "
-                f"표시 — 확정 {_cnt['확정']} · 원고 {_cnt['확정·원고']} · 검토 {_cnt['검토']} · 미정 {_cnt['미정']} · "
+                f"표시 — 확정 {_cnt['확정']} · 참고 원고 {_cnt['참고·원고']} · 검토 {_cnt['검토']} · 미정 {_cnt['미정']} · "
                 f"작가 방향 {'있음' if _dsec.strip() else '없음'}"
             )
 
-        with st.expander("추가 입력 (선택) — 메모 · 확정 원고 파일 · 생성 범위", expanded=False):
+        with st.expander("추가 입력 (선택) — 메모 · 작가 원고(기준점) 파일 · 생성 범위", expanded=False):
             st.session_state.author_direction = st.text_area(
                 "추가 작가 메모 (기획서의 '작가 방향'에 덧붙일 내용)",
                 value=st.session_state.author_direction,
@@ -1173,7 +1208,7 @@ with tab1:
                 key="u_direction",
             )
             _u_eps = st.file_uploader(
-                "확정 원고 파일 (여러 개 · 파일 이름의 EP001 / 1화로 회차 인식)",
+                "작가 원고 파일 — 기준점 (여러 개 · 파일 이름의 EP001 / 1화로 회차 인식 · 본문으로 들어가지 않고 비교·참고용)",
                 type=["docx", "txt", "md"],
                 accept_multiple_files=True,
                 key="u_eps",
@@ -1259,11 +1294,9 @@ with tab1:
                 _report = {"steps": [], "pending": [], "episodes": []}
                 _dir = _effective_direction()
 
-                # 확정 원고 등록
-                _slot = "episodes_19" if _u_rating == "19금" else "episodes_15"
-                _meta = dict(st.session_state.episode_meta or {})
-                _next = max([0] + [int(k) for k in (st.session_state[_slot] or {}).keys()
-                                   if str(k).isdigit()]) + 1
+                # 작가 원고 → 기준점 등록 (v2.12.0 — 본문 슬롯에 넣지 않는다)
+                _bm = dict(st.session_state.benchmarks or {})
+                _next = max([0] + [int(k) for k in _bm.keys() if str(k).isdigit()]) + 1
                 for _f in (_u_eps or []):
                     try:
                         _txt = parse_brief(_f)
@@ -1272,11 +1305,11 @@ with tab1:
                         continue
                     _ep = _ep_from_filename(_f.name) or _next
                     _next = max(_next, _ep + 1)
-                    st.session_state[_slot][_ep] = _txt
-                    _meta[_ep] = {"source": "author", "file": _f.name,
-                                  "imported_at": datetime.now().isoformat(timespec="seconds")}
-                    _report["episodes"].append(f"EP{_ep} ← {_f.name} ({len(_txt):,}자)")
-                st.session_state.episode_meta = _meta
+                    _bm[_ep] = {"text": _txt, "file": _f.name,
+                                "imported_at": datetime.now().isoformat(timespec="seconds")}
+                    st.session_state.benchmark_results.pop(_ep, None)
+                    _report["episodes"].append(f"EP{_ep} 기준점 ← {_f.name} ({len(_txt):,}자)")
+                st.session_state.benchmarks = _bm
                 _canon = build_canon_excerpt(_canon_episodes())
 
                 _cc_old = st.session_state.concept_card or {}
@@ -1371,7 +1404,7 @@ with tab1:
         if _rep:
             st.markdown("##### 통합 시작 결과")
             if _rep.get("episodes"):
-                st.markdown("**등록된 확정 원고** — " + " · ".join(_rep["episodes"]))
+                st.markdown("**등록된 기준점 원고** — " + " · ".join(_rep["episodes"]))
             st.markdown("\n".join(f"- {x}" for x in _rep.get("steps", [])))
             if _rep.get("pending"):
                 with st.expander(f"작가 결정이 필요한 항목 {len(_rep['pending'])}개", expanded=False):
@@ -2600,17 +2633,30 @@ with tab3:
 
             # ──── v2.10.0: 작가 원고 불러오기 ────
             _meta_ep = (st.session_state.episode_meta or {}).get(selected_ep) or {}
+            _bm_ep = (st.session_state.benchmarks or {}).get(selected_ep) or {}
             _imp_label = f"📥 EP{selected_ep} 작가 원고 불러오기 (DOCX/TXT/MD)"
-            if _meta_ep.get("source") == "author":
-                _imp_label += f" — 현재 작가 원고 ({_meta_ep.get('file', '')})"
+            if _bm_ep:
+                _imp_label += f" — 기준점 있음 ({_bm_ep.get('file', '')})"
+            elif _meta_ep.get("source") == "author":
+                _imp_label += f" — 현재 본문이 작가 원고 ({_meta_ep.get('file', '')})"
             with st.expander(_imp_label, expanded=False):
                 st.caption(
-                    "작가가 쓰거나 고친 원고를 이 회차 본문으로 등록합니다. 기존 본문은 교체되고, "
-                    "이 회차의 요약·검수 결과는 지워집니다. 등록 후 ⑥ 회차 요약을 다시 만들어야 "
-                    "다음 회차 플롯에 반영됩니다."
+                    "**기준점으로 등록(권장)** — 엔진 본문은 그대로 두고, 작가 원고를 📏 기준표에서 "
+                    "엔진 본문과 나란히 판정하는 비교 자료로만 씁니다. "
+                    "**본문으로 등록** — 작가 원고가 이 회차 본문이 됩니다 (요약·검수 결과 초기화)."
                 )
                 _imp = st.file_uploader("원고 파일", type=["docx", "txt", "md"],
                                         key=f"ep_import_{selected_ep}")
+                if _imp is not None and st.button(f"EP{selected_ep} 기준점으로 등록 (비교용)",
+                                                  type="primary", key=f"ep_bench_btn_{selected_ep}"):
+                    _t = parse_brief(_imp)
+                    _bm = dict(st.session_state.benchmarks or {})
+                    _bm[selected_ep] = {"text": _t, "file": _imp.name,
+                                        "imported_at": datetime.now().isoformat(timespec="seconds")}
+                    st.session_state.benchmarks = _bm
+                    st.session_state.benchmark_results.pop(selected_ep, None)
+                    st.success(f"✅ EP{selected_ep} 기준점 등록 ({len(_t):,}자). 📏 기준표에서 비교할 수 있습니다.")
+                    st.rerun()
                 if _imp is not None and st.button(f"EP{selected_ep} 본문으로 등록 ({rating})",
                                                   key=f"ep_import_btn_{selected_ep}"):
                     _t = parse_brief(_imp)
@@ -2622,6 +2668,7 @@ with tab3:
                     st.session_state.episode_meta = _m
                     st.session_state.episode_summaries.pop(selected_ep, None)
                     st.session_state.validation_results.pop(selected_ep, None)
+                    st.session_state.standard_results.pop(selected_ep, None)
                     st.success(f"✅ EP{selected_ep} 작가 원고 등록 ({len(_t):,}자). ⑥ 회차 요약을 다시 만들어 주세요.")
                     st.rerun()
 
@@ -2919,6 +2966,83 @@ with tab3:
                     with st.expander(_dv_label, expanded=not dev_scan["clean"]):
                         st.markdown(format_device_continuity_report(dev_scan, ep_number=selected_ep))
 
+                # ──── 📏 최고의 무협 기준표 (v2.12.0 — 객관 판정, 점수 없음) ────
+                _std_res = (st.session_state.standard_results or {}).get(selected_ep)
+                _std_stale = bool(_std_res) and _std_res.get("text_sig") != standard_text_sig(current_ep)
+                _bm_now = (st.session_state.benchmarks or {}).get(selected_ep) or {}
+                _bm_res = (st.session_state.benchmark_results or {}).get(selected_ep)
+                if not _std_res:
+                    _std_label = "📏 최고의 무협 기준표 — 아직 판정 안 함"
+                elif _std_stale:
+                    _std_label = "📏 최고의 무협 기준표 — ⚠️ 본문이 바뀜, 다시 판정 필요"
+                elif _std_res["verdict"] == "기준 충족":
+                    _std_label = "📏 최고의 무협 기준표 — ✅ 기준 충족"
+                else:
+                    _std_label = (f"📏 최고의 무협 기준표 — ⚠️ {_std_res['verdict']} "
+                                  f"({', '.join(_std_res.get('fail_ids') or [])})")
+                with st.expander(_std_label, expanded=bool(_std_res) and _std_res["verdict"] != "기준 충족"):
+                    st.caption(
+                        "점수를 매기지 않습니다. 항목마다 충족 / 미달 / 누락만 판정합니다. "
+                        "판정관(Sonnet)은 본문 문장을 그대로 인용하고, 엔진이 그 문장이 본문에 실제로 "
+                        "있는지·위치가 맞는지 대조합니다. 필수 항목이 하나라도 미달·누락이면 기준 미달입니다."
+                    )
+                    _canon_txt = "\n\n".join(x for x in (
+                        _effective_direction(),
+                        build_world_bible_block(st.session_state.concept_card),
+                    ) if x and x.strip())
+                    _plot_now = st.session_state.episode_plots.get(selected_ep)
+
+                    def _run_standard(_text):
+                        _raw = call_claude(
+                            build_standard_check_prompt(
+                                _text, selected_ep, st.session_state.concept_card,
+                                _plot_now, _canon_txt,
+                            ),
+                            max_tokens=MAX_TOKENS_ANALYSIS,
+                            model=MODEL_SONNET,
+                        )
+                        return evaluate_episode_standard(
+                            _text, selected_ep, safe_json(_raw),
+                            st.session_state.concept_card, platform, _plot_now,
+                        )
+
+                    _sc1, _sc2 = st.columns(2)
+                    with _sc1:
+                        if st.button(f"📏 EP{selected_ep} 엔진 본문 판정", key=f"std_btn_{selected_ep}",
+                                     use_container_width=True):
+                            with st.spinner("기준표 판정 중..."):
+                                st.session_state.standard_results[selected_ep] = _run_standard(current_ep)
+                            st.rerun()
+                    with _sc2:
+                        if st.button(f"📏 EP{selected_ep} 작가 원고(기준점) 판정", key=f"bm_btn_{selected_ep}",
+                                     use_container_width=True, disabled=not _bm_now.get("text")):
+                            with st.spinner("기준점 원고 판정 중..."):
+                                st.session_state.benchmark_results[selected_ep] = _run_standard(_bm_now["text"])
+                            st.rerun()
+                    if not _bm_now:
+                        st.caption("작가 원고를 위 📥 칸에서 '기준점으로 등록'하면 같은 기준으로 나란히 비교합니다.")
+
+                    if _std_res and _bm_res:
+                        _bm_map = {r["id"]: r for r in _bm_res.get("rows", [])}
+                        _cmp = ["| 항목 | 구분 | 엔진 본문 | 작가 원고 |", "|---|---|---|---|"]
+                        _behind = []
+                        for _r in _std_res.get("rows", []):
+                            _b = _bm_map.get(_r["id"], {})
+                            _cmp.append(f"| {_r['id']} {_r['name']} | {_r['need']} | {_r['status']} | {_b.get('status', '—')} |")
+                            if _b.get("status") == "충족" and _r["status"] in ("미달", "누락"):
+                                _behind.append(f"{_r['id']} {_r['name']}")
+                        st.markdown(f"**기준점 비교** — 엔진 {_std_res['verdict']} · 작가 원고 {_bm_res['verdict']}")
+                        st.markdown("\n".join(_cmp))
+                        if _behind:
+                            st.warning("작가 원고는 충족했는데 엔진 본문이 못 미친 항목: " + ", ".join(_behind))
+                        elif _std_res["verdict"] == "기준 충족":
+                            st.success("엔진 본문이 작가 원고가 충족한 항목을 모두 충족했습니다.")
+                    if _std_res:
+                        st.markdown(format_standard_report(_std_res, ep_number=selected_ep))
+                    if _bm_res:
+                        with st.expander("작가 원고(기준점) 판정 상세", expanded=False):
+                            st.markdown(format_standard_report(_bm_res, ep_number=selected_ep))
+
                 # ──── 초식 일관성 검사 (v2.5.0 — 정적 검출, API 미사용) ────
                 martial_scan = scan_martial_consistency(
                     current_ep,
@@ -3073,6 +3197,12 @@ with tab3:
                                     redo_parts.append(
                                         format_youth_diagnosis_report(redo_diag, ep_number=selected_ep)
                                     )
+                                # v2.12.0: 기준표 미달·누락 항목 주입 (본문이 판정 후 그대로일 때만)
+                                _std_r = (st.session_state.standard_results or {}).get(selected_ep)
+                                if _std_r and _std_r.get("text_sig") == standard_text_sig(current_ep):
+                                    _std_txt = format_standard_report(_std_r, ep_number=selected_ep, for_redo=True)
+                                    if _std_txt:
+                                        redo_parts.append(_std_txt)
                                 redo_scan_report = "\n\n".join(redo_parts)
                                 redo_text = call_claude_opus(
                                     build_episode_redo_prompt(

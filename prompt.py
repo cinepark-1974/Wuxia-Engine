@@ -1,10 +1,31 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.11.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.0 (2026-11-07) — 최고의 무협 기준표 (객관 점검 · 점수 없음)
+  · [작가 요청] "채점의 기준은 객관적이야. 부족한 요소. 기준미달. 이런 거."
+    점수(몇 점)를 매기지 않는다. 항목마다 충족 / 미달 / 누락 / 해당 없음만 낸다.
+  · WUXIA_STANDARD_EPISODE — 회차 기준표 (필수 8 · 조건부 1 · 권장 2)
+      L1 분량 · H1 오프닝 훅 · C1 클리프행어 · A1 주인공 능동 선택 ·
+      M1 무공 시전(이름·동작·결과) · P1 플롯 씬 이행 · K1 설정 위반 없음 ·
+      X1 대가 · S1 경쟁 규칙 가시성(서바이벌 회차) · Y1 또래 관계 변화 · H2 한자 병기 상한
+  · 판정은 근거 문장으로만 — LLM 판정관(Sonnet, 집필 Opus와 분리)은 본문 문장을
+    그대로 인용해야 하고, 코드가 그 문장이 본문에 실제로 있는지·위치(첫 15% /
+    마지막 15%)가 맞는지 대조한다. 인용이 없으면 누락, 본문에 없는 인용이면 미달
+  · WUXIA_STANDARD_PLANNING — 기획 단계 필수 요소 8개 (로그라인 4요소·결핍·
+    이름 있는 적대자·경쟁 규칙·무공 단계·막 회차 배분·결말 대가·1~3화 진입).
+    기획서 진단에 주입: 없으면 GAP, 있으나 기준 미달이면 IMPROVE
+  · build_standard_write_block() — 집필 프롬프트에 "이 회차는 아래 기준표로 점검된다" 주입
+  · build_standard_check_prompt() — 판정관 프롬프트 (인용 필수 · 생략부호 금지)
+  · standard_hanja_limit() — 한자 병기 상한. 기존 A29 쿼터 상단과 일치
+    (수위 2~3: EP1~4 15회 · EP5~ 12회 / 수위 0~1: 조선 역사형 15회 · 그 외 8회)
+  · build_author_direction_block — 원고 발췌를 "확정 원고 2순위"에서 "참고 · 기준선"으로.
+    우선순위: 작가 방향·채택표 > 기획서 > 작가 원고(참고)
+  · 정본 기획서 표시 [확정·원고] → [참고·원고]. 작가 원고는 고정이 아니라 예시다.
+    판정 REF, 채택표에서 "참고" 묶음으로 전달. 구 표시 [확정·원고]도 참고로 읽는다
 v2.11.0 (2026-11-07) — Strength Picker (정본 기획서 하나 → 진단 → 채택)
   · BRIEF_SECTION_KEYS에 정본 기획서 섹션 3종 추가 — 작가 방향 / 확정 원고 / 서사 장치
     (용도별 가중치: 컨셉 카드 압축 시 작가 방향 3.0)
@@ -280,7 +301,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.11.0"
+ENGINE_VERSION = "v2.12.0"
 ENGINE_BUILD_DATE = "2026-11-07"
 
 # ═══════════════════════════════════════════════════
@@ -1309,7 +1330,7 @@ CANON_EXCERPT_MAX_EPS = 4
 def build_author_direction_block(author_direction="", canon_excerpt=""):
     """작가 방향 메모 + 확정 원고 발췌 — 모든 기획·집필 프롬프트의 최상단 블록.
 
-    우선순위: 작가 방향 메모 > 확정 원고 > 기획서 > 그 밖의 참고 자료
+    우선순위 (v2.12.0): 작가 방향 메모·채택표 > 기획서 > 작가 원고(참고·기준선)
     """
     d = (author_direction or "").strip()[:AUTHOR_DIRECTION_MAX_CHARS]
     c = (canon_excerpt or "").strip()
@@ -1320,12 +1341,14 @@ def build_author_direction_block(author_direction="", canon_excerpt=""):
         lines.append(d)
     if c:
         lines.append("")
-        lines.append("### 확정 원고 발췌 — 2순위 (원고에 나온 인물·관계·사건·능력 표현은 기획서보다 우선)")
+        lines.append("### 작가 원고 발췌 — 참고 · 기준선 (v2.12.0)")
+        lines.append("문체·장면 밀도의 기준선이다. 인물 이름·관계는 따르되, 장면·사건 배치는 예시이므로 "
+                     "기준표를 더 잘 충족하는 설계가 있으면 바꿀 수 있다. 이 원고보다 못하면 안 된다.")
         lines.append(c)
     lines.append("")
     lines.append("### 우선순위 규칙")
-    lines.append("1. 작가 방향 메모  2. 확정 원고  3. 기획서  4. 그 밖의 참고 자료")
-    lines.append("- 아래 기획서의 설정이 위 메모·원고와 다르면 기획서 쪽을 버린다.")
+    lines.append("1. 작가 방향 메모·채택표  2. 기획서  3. 작가 원고(참고·기준선)  4. 그 밖의 참고 자료")
+    lines.append("- 아래 기획서의 설정이 위 메모와 다르면 기획서 쪽을 버린다.")
     lines.append("- 메모·원고·기획서 어디에도 없는 인물·조직·설정은 새로 만들지 않는다.")
     return "\n".join(lines)
 
@@ -1347,7 +1370,7 @@ def build_canon_excerpt(episodes, per_ep=CANON_EXCERPT_PER_EP, max_eps=CANON_EXC
         if not t:
             continue
         body = t[:per_ep] + ("\n[...이하 생략...]" if len(t) > per_ep else "")
-        out.append(f"[EP{ep} 확정 원고 · {len(t):,}자 중 앞부분]\n{body}")
+        out.append(f"[EP{ep} 작가 원고(참고) · {len(t):,}자 중 앞부분]\n{body}")
     return "\n\n".join(out)
 
 
@@ -1484,7 +1507,7 @@ def build_narrative_devices_prompt(brief_text, concept_card, author_direction=""
 }}
 
 ## 규칙
-- 작가 방향 메모 > 확정 원고 > 기획서 순으로 따른다.
+- 작가 방향 메모 > 기획서 > 작가 원고(참고) 순으로 따른다.
 - 자료에 근거가 있는 항목만 쓴다. 회차 번호가 자료에 없으면 ep는 "" 로 둔다.
 - 근거가 없어 비운 칸·빠진 항목은 pending 배열에 짧게 적는다 (예: "서아 창술 전수 회차").
 - 새 스승·새 무공·새 레퍼런스를 지어내지 않는다.
@@ -2458,7 +2481,7 @@ BRIEF_SECTION_KEYS = [
     ("appendix",  ["별첨", "APPENDIX", "부록", "설정집", "무공설정", "무공 설정"]),
     # v2.11.0 — 정본 기획서 전용 섹션
     ("direction", ["작가 방향", "작가방향", "작가 메모", "확정 방향", "DIRECTION"]),
-    ("canon",     ["확정 원고", "확정원고", "원고 확정"]),
+    ("canon",     ["확정 원고", "확정원고", "원고 확정", "참고 원고", "참고원고"]),
     ("devices",   ["서사 장치", "서사장치"]),
 ]
 
@@ -5203,12 +5226,15 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
 - 회차 제목으로 시작 (EP{ep_number}. [제목])
 - 본문은 장면 전환 시 빈 줄로 구분
 - 마지막 2~3줄은 명확한 클리프행어 (주인공 축에서 닫을 것)
-- 고어체 규칙 엄수. 한자 병기는 고유명사 첫 등장에 반드시,
-  재등장 시 한글만 (회차당 8~15회가 정상 범위)
+- 고어체 규칙 엄수. 한자 병기는 고유명사 첫 등장에만,
+  재등장 시 한글만 (회차당 상한 {standard_hanja_limit(concept_card, ep_number)}회 — 기준표 H2 · A29 하한도 지킬 것)
 - **A29 장르 밀도 쿼터 충족 · A30 3박자(명명→시연→해설) 완주**
   — 초식 바이블의 무공 이름을 적극 사용할 것.
     이름 없는 격투로 무공 장면을 대체하지 말 것.
 {_youth_write_directive(concept_card)}
+
+{build_standard_write_block(concept_card, ep_number, platform)}
+
 본문만 작성하세요. 메타 설명·JSON 없이 순수 본문."""
 
 
@@ -6519,8 +6545,9 @@ def build_episode_redo_prompt(
 #      것만 반영된다. 고르지 않은 약한 원문은 따르지 않는다.
 # ═══════════════════════════════════════════════════
 
-BRIEF_TAGS = ("확정·원고", "확정", "검토", "미정")
-BRIEF_TAG_RE = re.compile(r"^\s*\[(확정·원고|확정 · 원고|확정|검토|미정)\]\s*(.+)$")
+BRIEF_TAGS = ("참고·원고", "확정", "검토", "미정")   # v2.12.0: 확정·원고 → 참고·원고
+BRIEF_TAG_RE = re.compile(r"^\s*\[(참고·원고|참고 · 원고|확정·원고|확정 · 원고|확정|검토|미정)\]\s*(.+)$")
+_OLD_TAG_MAP = {"확정·원고": "참고·원고"}   # v2.11.0 이전 표시는 참고로 읽는다
 
 DIAG_VERDICTS = {
     "LOCK": "작가 확정",
@@ -6528,6 +6555,7 @@ DIAG_VERDICTS = {
     "IMPROVE": "약점 · 보강 후보",
     "GAP": "빈칸",
     "DECIDE": "작가 결정 필요",
+    "REF": "참고 · 원고 예시",   # v2.12.0 — 더 나은 설계가 있으면 바꿀 수 있다
 }
 DIAG_CHOICES = ["원문 유지", "제안 채택", "보류"]
 
@@ -6535,7 +6563,7 @@ _SECTION_LABEL = {
     "overview": "개요", "logline": "로그라인", "intent": "기획의도",
     "world": "세계관", "character": "캐릭터", "synopsis": "시놉시스",
     "storyline": "스토리라인", "episodes": "회차 구성",
-    "appendix": "별첨", "direction": "작가 방향", "canon": "확정 원고",
+    "appendix": "별첨", "direction": "작가 방향", "canon": "참고 원고",
     "devices": "서사 장치", "other": "기타",
 }
 
@@ -6558,6 +6586,7 @@ def parse_tagged_brief(brief_text):
             m = BRIEF_TAG_RE.match(ln)
             if m:
                 tg = m.group(1).replace(" ", "")
+                tg = _OLD_TAG_MAP.get(tg, tg)
                 tagged.append({"tag": tg, "section": label, "text": m.group(2).strip()})
             elif ln.strip():
                 plain.append(ln)
@@ -6572,7 +6601,7 @@ def parse_tagged_brief(brief_text):
 def build_brief_diagnosis_prompt(untagged_text, tagged=None, budget=26000):
     """표시 없는 원문을 요소 단위로 진단 — 강점은 그대로, 약점은 보강 후보로."""
     tagged = tagged or []
-    lock = [t for t in tagged if t["tag"] in ("확정", "확정·원고")]
+    lock = [t for t in tagged if t["tag"] == "확정"]
     lock_txt = "\n".join(f"- ({t['section']}) {t['text']}" for t in lock[:60]) or "(없음)"
     body = (untagged_text or "")[:budget]
     return f"""당신은 한국 웹소설·무협 장르의 기획 편집자입니다. 아래 기획서를 요소 단위로
@@ -6583,6 +6612,8 @@ def build_brief_diagnosis_prompt(untagged_text, tagged=None, budget=26000):
 
 ## 진단할 원문 (작가 표시가 없는 부분)
 {body}
+
+{build_planning_standard_block()}
 
 ## 진단 단위
 로그라인 / 주인공 설정 / 주요 인물(각각) / 학교·세력(각각) / 대회 규칙 /
@@ -6617,11 +6648,11 @@ def diagnosis_rows(llm_items, tagged):
     """진단 결과 + 작가 표시 줄 → 채택표 행 목록 (기본 선택값 포함)."""
     rows = []
     for t in tagged or []:
-        verdict = {"확정": "LOCK", "확정·원고": "LOCK", "검토": "DECIDE", "미정": "GAP"}.get(t["tag"], "DECIDE")
+        verdict = {"확정": "LOCK", "참고·원고": "REF", "검토": "DECIDE", "미정": "GAP"}.get(t["tag"], "DECIDE")
         rows.append({
             "area": t["section"], "element": t["text"][:60], "quote": t["text"],
             "verdict": verdict, "strength": "", "weakness": "", "proposal": "",
-            "choice": "원문 유지" if verdict == "LOCK" else "보류",
+            "choice": "원문 유지" if verdict in ("LOCK", "REF") else "보류",
             "source": f"작가 표시 [{t['tag']}]",
         })
     for it in llm_items or []:
@@ -6643,7 +6674,7 @@ def diagnosis_rows(llm_items, tagged):
 
 def compose_adoption_block(rows):
     """작가가 고른 채택표 → 모든 기획·집필 프롬프트에 들어갈 지시 블록."""
-    keep, swap, hold = [], [], []
+    keep, swap, hold, ref = [], [], [], []
     n_lock = 0
     for r in rows or []:
         if r.get("verdict") == "LOCK" and (r.get("choice") or "원문 유지") == "원문 유지":
@@ -6652,22 +6683,233 @@ def compose_adoption_block(rows):
         ch = r.get("choice") or "보류"
         el = r.get("element") or r.get("quote", "")[:40]
         area = r.get("area", "")
-        if ch == "원문 유지" and r.get("verdict") != "GAP":
+        if ch == "원문 유지" and r.get("verdict") == "REF":
+            ref.append(f"- ({area}) {(r.get('quote') or el)[:140]}")
+        elif ch == "원문 유지" and r.get("verdict") != "GAP":
             keep.append(f"- ({area}) {el}" + (f" — 원문: {r['quote'][:80]}" if r.get("quote") and r["quote"] != el else ""))
         elif ch == "제안 채택" and str(r.get("proposal") or "").strip():
             swap.append(f"- ({area}) {el}: {r['proposal'].strip()}"
                         + (f" (원문 '{r['quote'][:60]}' 대신)" if r.get("quote") else ""))
         else:
             hold.append(f"- ({area}) {(r.get('quote') or el)[:140]}")
-    if not (keep or swap or hold or n_lock):
+    if not (keep or swap or hold or ref or n_lock):
         return ""
     out = ["## 📋 기획서 진단 채택표 (작가 선택 — 최우선)"]
     if n_lock:
-        out.append(f"- 기획서에서 [확정]·[확정·원고] 표시된 줄({n_lock}개)은 그대로 따른다.")
+        out.append(f"- 기획서에서 [확정] 표시된 줄({n_lock}개)은 그대로 따른다.")
     if keep:
         out += ["### 그대로 쓴다 — 기획서의 강점", *keep]
+    if ref:
+        out += ["", "### 참고 — 작가 원고에 쓰인 장면·사실. 좋은 예시로 쓰되, "
+                "기준표를 더 잘 충족하는 설계가 있으면 바꿀 수 있다", *ref]
     if swap:
         out += ["", "### 원문 대신 이렇게 쓴다 — 작가가 고른 보강안", *swap]
     if hold:
         out += ["", "### 보류 — 원문을 따르지 않고, 새로 지어내지도 않는다 (작가 결정 전까지 비워 둔다)", *hold]
     return "\n".join(out)
+
+
+# ═══════════════════════════════════════════════════
+# v2.12.0 — 최고의 무협 기준표 (객관 점검)
+# ───────────────────────────────────────────────────
+# 점수를 매기지 않는다. 항목마다 "있다 / 없다 / 기준에 못 미친다"만 판정한다.
+# 판정 근거는 본문 문장 인용뿐이고, 인용은 코드가 본문과 대조한다
+# (engine_validator.evaluate_episode_standard).
+#
+# check 종류
+#   static      — 코드가 센다 (분량·한자 병기)
+#   quote       — 근거 문장 1개 (본문 어디든)
+#   quote_first — 근거 문장이 본문 첫 15% 안에 있어야 한다
+#   quote_last  — 근거 문장이 본문 마지막 15% 안에 있어야 한다
+#   beats       — 플롯의 씬마다 근거 문장
+#   violation   — 어긋나는 문장을 찾는다 (찾으면 미달)
+# need: 필수(하나라도 미달·누락이면 기준 미달) / 권장(표시만)
+# applies: always / survival(경쟁·시험 회차) / youth(10대 타깃) / plot(플롯 있을 때)
+# ═══════════════════════════════════════════════════
+
+WUXIA_STANDARD_EPISODE = [
+    {"id": "L1", "axis": "연재", "need": "필수", "check": "static", "applies": "always",
+     "name": "분량",
+     "criterion": "공백 포함 글자 수가 플랫폼 최소~최대 범위 안에 있다"},
+    {"id": "H1", "axis": "연재", "need": "필수", "check": "quote_first", "applies": "always",
+     "name": "오프닝 훅",
+     "criterion": "본문 첫 15% 안에 갈등·위협·이상 징후가 드러나는 문장이 있다 "
+                  "(배경 설명·날씨·기상만으로 시작하면 미달)"},
+    {"id": "C1", "axis": "연재", "need": "필수", "check": "quote_last", "applies": "always",
+     "name": "클리프행어",
+     "criterion": "본문 마지막 15% 안에 이번 화에서 해결되지 않는 위협·질문·폭로 문장이 있다 "
+                  "(정리·회상·다짐으로 끝나면 미달)"},
+    {"id": "A1", "axis": "성장", "need": "필수", "check": "quote", "applies": "always",
+     "name": "주인공 능동 선택",
+     "criterion": "주인공이 스스로 판단해 행동을 정하는 문장이 있다 "
+                  "(끌려가거나 구출되거나 지켜보기만 하면 미달)"},
+    {"id": "M1", "axis": "무협", "need": "필수", "check": "quote", "applies": "always",
+     "name": "무공 시전",
+     "criterion": "무공·기술의 이름, 몸의 동작, 눈에 보이는 결과가 한 장면 안에 함께 있다 "
+                  "(이름 없는 격투, 결과만 있는 서술은 미달)"},
+    {"id": "P1", "axis": "설계", "need": "필수", "check": "beats", "applies": "plot",
+     "name": "플롯 씬 이행",
+     "criterion": "회차 플롯의 모든 씬이 본문에 장면으로 있다"},
+    {"id": "K1", "axis": "정합", "need": "필수", "check": "violation", "applies": "always",
+     "name": "설정 위반 없음",
+     "criterion": "작가 확정 사항·채택표·세계관 바이블과 어긋나는 문장이 없다"},
+    {"id": "S1", "axis": "서바이벌", "need": "필수", "check": "quote", "applies": "survival",
+     "name": "경쟁 규칙 가시성",
+     "criterion": "경쟁·시험·대회 장면이 있는 회차라면, 그 규칙이나 탈락 조건이 본문에 문장으로 있다"},
+    {"id": "X1", "axis": "서바이벌", "need": "권장", "check": "quote", "applies": "always",
+     "name": "대가",
+     "criterion": "이번 화에서 누군가 무언가를 잃거나 대가를 치른다 (부상·탈락·관계·자원·비밀)"},
+    {"id": "Y1", "axis": "성장", "need": "권장", "check": "quote", "applies": "youth",
+     "name": "또래 관계 변화",
+     "criterion": "주인공과 또래 한 명의 관계가 이번 화 안에서 달라지는 문장이 있다"},
+    {"id": "H2", "axis": "글로벌", "need": "권장", "check": "static", "applies": "always",
+     "name": "한자 병기 상한",
+     "criterion": "괄호 한자 병기 횟수가 상한 이하다"},
+]
+
+WUXIA_STANDARD_PLANNING = [
+    {"id": "G1", "name": "로그라인 4요소", "applies": "always",
+     "criterion": "주인공 · 원하는 것 · 가로막는 것 · 실패하면 잃는 것이 모두 적혀 있다"},
+    {"id": "G2", "name": "주인공 결핍", "applies": "always",
+     "criterion": "주인공에게 없는 것 또는 틀린 믿음이 문장으로 적혀 있다"},
+    {"id": "G3", "name": "이름 있는 적대자", "applies": "always",
+     "criterion": "이름이 있는 적대 인물이 1명 이상이고, 그가 원하는 것이 적혀 있다"},
+    {"id": "G4", "name": "경쟁 규칙", "applies": "survival",
+     "criterion": "참가 조건 · 탈락 조건 · 탈락의 대가 · 승자의 보상이 적혀 있다"},
+    {"id": "G5", "name": "무공 단계", "applies": "always",
+     "criterion": "경지·등급 단계의 수와 이름, 단계를 오르는 조건이 적혀 있다"},
+    {"id": "G6", "name": "막별 회차 배분", "applies": "always",
+     "criterion": "막(또는 시즌 구간)마다 회차 범위가 적혀 있다"},
+    {"id": "G7", "name": "결말의 대가", "applies": "always",
+     "criterion": "최종 대결의 상대와 주인공이 치르는 대가가 적혀 있다"},
+    {"id": "G8", "name": "1~3화 진입", "applies": "always",
+     "criterion": "1~3화 안에 핵심 갈등(대회·위협·사건)에 들어가는 사건이 적혀 있다"},
+]
+
+_SURVIVAL_WORDS = ("대회", "서바이벌", "시험", "토너먼트", "선발전", "탈락", "생존", "헝거게임", "비무")
+
+
+def standard_applies(concept_card=None):
+    """기준표 조건부 항목이 이 작품에 해당하는지 — {"survival": bool, "youth": bool}."""
+    cc = _concept_as_dict(concept_card)
+    blob = json.dumps({k: cc.get(k) for k in (
+        "title", "logline", "genre", "synopsis", "world_setting", "formula_key",
+        "wuxia_formula_main", "wuxia_formula_sub", "author_direction",
+    )}, ensure_ascii=False)
+    survival = ("F4_학원_무협" in blob) or any(w in blob for w in _SURVIVAL_WORDS)
+    return {"survival": survival, "youth": is_youth_target(cc)}
+
+
+def standard_hanja_limit(concept_card=None, ep_number=0):
+    """한자 병기 상한 — 기존 A29 밀도 쿼터의 상단값과 맞춘다.
+
+    판타지 수위 2~3: EP1~4는 15회, EP5부터 12회 (A29 표 '8~15 / 6~12'의 상단)
+    판타지 수위 0~1: A29 한자 쿼터가 꺼진다 → 조선 역사형 15회, 그 외 8회(글로벌 친화)
+    """
+    cc = _concept_as_dict(concept_card)
+    try:
+        lv = resolve_fantasy_level(cc, ep_number)
+    except Exception:
+        lv = 2
+    if lv >= 2:
+        return 15 if (ep_number or 0) <= 4 else 12
+    try:
+        if resolve_world_type(cc) == "조선_역사":
+            return 15
+    except Exception:
+        pass
+    return 8
+
+
+def standard_items_for(concept_card=None, has_plot=True):
+    """이 작품·회차에 적용되는 회차 기준표 항목."""
+    ap = standard_applies(concept_card)
+    out = []
+    for it in WUXIA_STANDARD_EPISODE:
+        a = it["applies"]
+        if a == "survival" and not ap["survival"]:
+            continue
+        if a == "youth" and not ap["youth"]:
+            continue
+        if a == "plot" and not has_plot:
+            continue
+        out.append(it)
+    return out
+
+
+def build_standard_write_block(concept_card=None, ep_number=0, platform="문피아"):
+    """집필 프롬프트용 — 이 회차가 점검받을 기준을 미리 알린다."""
+    plen = get_platform_length(platform)
+    lines = ["## 📏 최고의 무협 기준표 — 이 회차는 집필 후 아래 항목으로 점검된다",
+             "점수는 없다. 항목마다 '충족 / 미달 / 누락'만 판정하고, 근거는 본문 문장이다."]
+    for it in standard_items_for(concept_card, has_plot=True):
+        crit = it["criterion"]
+        if it["id"] == "L1":
+            crit = f"공백 포함 {plen['min']:,}~{plen['max']:,}자"
+        elif it["id"] == "H2":
+            crit = f"괄호 한자 병기 {standard_hanja_limit(concept_card, ep_number)}회 이하 (A29 하한도 함께 지킬 것)"
+        lines.append(f"- [{it['need']}] {it['id']} {it['name']}: {crit}")
+    return "\n".join(lines)
+
+
+def build_planning_standard_block(concept_card=None):
+    """기획서 진단용 — 기획 단계 필수 요소."""
+    ap = standard_applies(concept_card) if concept_card else {"survival": True}
+    lines = ["## 📏 기획 단계 기준표 — 필수 요소 (객관 판정)",
+             "아래 요소가 원문에 없으면 GAP, 있으나 기준에 못 미치면 IMPROVE로 판정하고",
+             "element 맨 앞에 기준 번호를 붙인다 (예: \"G4 경쟁 규칙\"). 충족하면 따로 적지 않는다."]
+    for it in WUXIA_STANDARD_PLANNING:
+        if it["applies"] == "survival" and not ap.get("survival", True):
+            continue
+        lines.append(f"- {it['id']} {it['name']}: {it['criterion']}")
+    return "\n".join(lines)
+
+
+def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
+                                episode_plot=None, canon_text="", budget=24000):
+    """판정관 프롬프트 — 집필(Opus)과 분리된 Sonnet이 근거 문장만 뽑는다.
+
+    판정(충족/미달)은 이 응답으로 하지 않는다. 코드가 인용을 본문과 대조해 판정한다.
+    """
+    plot = episode_plot if isinstance(episode_plot, dict) else {}
+    scenes = [sc for sc in (plot.get("scenes") or []) if isinstance(sc, dict)]
+    items = [it for it in standard_items_for(concept_card, has_plot=bool(scenes))
+             if it["check"] != "static"]
+    item_lines = "\n".join(f"- {it['id']} {it['name']}: {it['criterion']}" for it in items)
+    scene_lines = "\n".join(
+        f"- 씬 {sc.get('scene_no', i + 1)}: {str(sc.get('beat') or '')} — {str(sc.get('action') or '')[:220]}"
+        for i, sc in enumerate(scenes)
+    ) or "(플롯 없음 — P1 생략)"
+    canon = (canon_text or "").strip()[:8000] or "(없음 — K1은 빈 목록)"
+    body = (episode_text or "")[:budget]
+    return f"""당신은 무협 웹소설 편집부의 기준표 판정관입니다. 점수를 매기지 않습니다.
+각 기준에 대해 **본문에서 근거 문장을 그대로 복사해** 내놓기만 합니다.
+
+## 인용 규칙 (어기면 그 항목은 무효 처리된다)
+- 본문 문장을 한 글자도 바꾸지 말고 복사한다. 요약·의역·생략부호(… ...) 금지.
+- 10자 이상 120자 이하. 한 문장 또는 이어진 두 문장.
+- 근거가 없으면 quote를 ""로 둔다. 억지로 비슷한 문장을 고르지 않는다.
+- S1은 경쟁·시험·대회 장면 자체가 없으면 applicable을 false로 둔다.
+
+## 기준
+{item_lines}
+
+## 회차 플롯 씬 (P1 — 씬마다 그 씬이 본문에 구현된 문장)
+{scene_lines}
+
+## 작가 확정 사항 · 채택표 · 세계관 (K1 — 이것과 어긋나는 본문 문장)
+{canon}
+
+## EP{ep_number} 본문
+{body}
+
+## 출력 — 아래 JSON 객체만
+{{
+  "items": {{
+    "H1": {{"quote": ""}},
+    "S1": {{"applicable": true, "quote": ""}}
+  }},
+  "P1": [{{"scene_no": 1, "quote": ""}}],
+  "K1": [{{"quote": "", "conflicts_with": "어긋나는 확정 사항 한 줄"}}]
+}}
+items에는 위 기준 중 P1·K1을 뺀 모든 번호를 넣는다. JSON 외 텍스트 금지. 코드 블록 금지."""
