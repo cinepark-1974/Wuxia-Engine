@@ -1,9 +1,16 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.12.1 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.2 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.2 (2026-11-07) — 배포 후 ImportError 수정 (오래된 모듈 캐시)
+  · [사고] Streamlit Cloud 로그: v2.9.0 배포(11-06 14:38 UTC)부터
+    "ImportError: cannot import name 'WORLD_TYPES' from 'prompt'" 반복.
+    GitHub의 prompt.py에는 WORLD_TYPES가 있고, 새로 받은 사본은 Python 3.11에서
+    정상 import — 클라우드 프로세스가 예전 prompt 모듈을 메모리에 붙들고 있던 것
+  · main.py import 직전에 로컬 모듈 5개를 파일 수정 시각 기준으로 다시 읽는다
+    (prompt → profession_pack → parser → docx_builder → engine_validator 순)
 v2.12.1 (2026-11-07) — 집필 플랫폼 기본값 문피아
   · [작가 요청] "문피아를 디폴트로 하고 네이버를 선택으로."
   · STEP 3 플랫폼 선택: 문피아(5,000~6,000자)가 항상 기본. 네이버웹소설 등은 선택.
@@ -295,6 +302,25 @@ import anthropic
 import json
 import re
 from datetime import datetime
+
+# ──── v2.12.2: 로컬 모듈 최신화 ────
+# Streamlit Cloud는 GitHub 변경을 받아도 이미 메모리에 올라간 prompt.py 등을
+# 예전 판으로 계속 쓸 수 있다 (v2.9.0~v2.12.1 배포 후 ImportError: WORLD_TYPES).
+# 파일 수정 시각이 바뀐 모듈만 다시 읽는다. prompt를 먼저, 그것을 읽는 모듈을 뒤에.
+import importlib as _bj_il
+import os as _bj_os
+import sys as _bj_sys
+for _bj_name in ("prompt", "profession_pack", "parser", "docx_builder", "engine_validator"):
+    _bj_mod = _bj_sys.modules.get(_bj_name)
+    if _bj_mod is None or not getattr(_bj_mod, "__file__", None):
+        continue
+    try:
+        _bj_mt = _bj_os.path.getmtime(_bj_mod.__file__)
+        if getattr(_bj_mod, "_bj_mtime", None) != _bj_mt:
+            _bj_mod = _bj_il.reload(_bj_mod)
+            _bj_mod._bj_mtime = _bj_mt
+    except Exception:
+        pass
 
 from prompt import (
     SYSTEM_PROMPT,
