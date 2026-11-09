@@ -1,10 +1,17 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.12.2 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.3 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.3 (2026-11-09) — Extension Arc 분할 생성 (응답 잘림 수정)
+  · [사고] Extension 50화를 한 번에 요청 → 64,000토큰 한도에서 잘림 (26화·35화에서 끊김).
+    출력 JSON은 2만 자 남짓 — 한도의 대부분을 사고(thinking) 토큰이 썼다
+  · build_extension_outline_prompt() — 전체 뼈대(회차당 한 줄) 먼저
+  · build_extension_arc_prompt(ep_start, ep_end, outline_text, prev_eps_text) — 10화씩
+    (EXTENSION_CHUNK_SIZE). 인자 없이 부르면 예전처럼 한 번에 (하위 호환)
+  · Extension에도 작가 방향 블록·세계 유형 블록 주입 (Core Arc와 같은 기준)
 v2.12.2 (2026-11-07) — 배포 후 ImportError 수정 (main.py 모듈 최신화, 룰 변경 없음)
 v2.12.1 (2026-11-07) — 집필 플랫폼 기본값 문피아 (main.py UI 변경, 룰 변경 없음)
 v2.12.0 (2026-11-07) — 최고의 무협 기준표 (객관 점검 · 점수 없음)
@@ -303,7 +310,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.12.2"
+ENGINE_VERSION = "v2.12.3"
 ENGINE_BUILD_DATE = "2026-11-07"
 
 # ═══════════════════════════════════════════════════
@@ -4891,37 +4898,81 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
 {core_eps}개 회차를 빠짐없이 작성. JSON 배열만 반환."""
 
 
-def build_extension_arc_prompt(concept_card, core_arc_text,
-                               extension_mode="bridge", extension_eps=50,
-                               reader_feedback="", producer_note=""):
-    """Extension Arc 생성."""
+EXTENSION_CHUNK_SIZE = 10   # v2.12.3 — Extension은 10화씩 나눠 생성 (출력 한도 회피)
+
+
+def _extension_common_head(concept_card, core_arc_text, extension_mode, producer_note,
+                           reader_feedback=""):
     mode_desc = {
         "bridge": "Core 직결 후속. 새 적·세력·단계.",
         "jump": "시간 점프. 주인공 성숙. 신세대 등장 가능.",
     }.get(extension_mode, "Core 직결 후속.")
-
-    feedback_block = ""
-    if reader_feedback:
-        feedback_block = f"\n## 독자 피드백 반영\n{reader_feedback}"
-
+    _cc = _concept_as_dict(concept_card)
+    feedback_block = f"\n## 독자 피드백 반영\n{reader_feedback}" if reader_feedback else ""
     return f"""{_pn_block(producer_note)}
+
+{build_author_direction_block(_cc.get("author_direction", ""))}
+
+{build_world_type_block(concept_card, 0)}
 
 {EXTENSION_DESIGN}
 
 ## 확장 모드: {extension_mode}
 {mode_desc}
 
-## Core Arc 요약
+## Core Arc
 {core_arc_text}
 
 ## 컨셉 카드
 {concept_card}
-{feedback_block}
+{feedback_block}"""
+
+
+def build_extension_outline_prompt(concept_card, core_arc_text, extension_mode="bridge",
+                                   extension_eps=50, ep_start=51, producer_note="",
+                                   reader_feedback=""):
+    """v2.12.3 — Extension 전체 뼈대 (회차당 한 줄). 본 설계는 10화씩 나눠 채운다."""
+    ep_end = ep_start + extension_eps - 1
+    return f"""{_extension_common_head(concept_card, core_arc_text, extension_mode, producer_note, reader_feedback)}
+
+Core Arc의 결말 이후 EP{ep_start}~EP{ep_end} ({extension_eps}화) Extension의 **뼈대만** 설계하세요.
+회차마다 한 줄이면 된다. 막 구분(10화 안팎 단위)과 그 막의 목표가 드러나야 한다.
+
+## 출력 — JSON 배열만 ({extension_eps}개, 순서대로)
+[{{"ep": {ep_start}, "act": "막 이름", "title": "회차 제목", "one_line": "이 회차에서 벌어지는 핵심 사건 한 문장"}}]
+JSON 외 텍스트 금지."""
+
+
+def build_extension_arc_prompt(concept_card, core_arc_text,
+                               extension_mode="bridge", extension_eps=50,
+                               reader_feedback="", producer_note="",
+                               outline_text="", prev_eps_text="",
+                               ep_start=None, ep_end=None):
+    """Extension Arc 생성.
+
+    v2.12.3: ep_start/ep_end를 주면 그 구간만 생성한다 (10화 단위).
+      outline_text — 전체 뼈대, prev_eps_text — 직전까지 생성된 Extension 회차
+    """
+    head = _extension_common_head(concept_card, core_arc_text, extension_mode,
+                                  producer_note, reader_feedback)
+    if ep_start is None or ep_end is None:
+        return f"""{head}
 
 Core Arc의 결말 이후 {extension_eps}화 Extension을 설계하세요.
 
 ## 출력 형식
 Core Arc와 동일한 JSON 배열 형식으로 {extension_eps}개 회차. JSON만 반환."""
+    n = ep_end - ep_start + 1
+    outline = f"\n## Extension 전체 뼈대 (이 흐름을 따른다)\n{outline_text}\n" if outline_text else ""
+    prev = (f"\n## 이미 설계된 Extension 회차 (이어서 쓴다 · 반복 금지)\n{prev_eps_text}\n"
+            if prev_eps_text else "")
+    return f"""{head}
+{outline}{prev}
+이번에는 **EP{ep_start}~EP{ep_end} ({n}개 회차)만** 설계하세요.
+직전 회차의 클리프행어를 이어받고, 뼈대의 해당 회차 사건을 구체 장면으로 채운다.
+
+## 출력 형식
+Core Arc와 동일한 필드의 JSON 배열 ({n}개, "ep"는 {ep_start}부터 {ep_end}까지). JSON만 반환."""
 
 
 def build_plant_payoff_prompt(arc_text, characters, arc_type="core"):

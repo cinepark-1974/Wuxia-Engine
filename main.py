@@ -1,9 +1,16 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.12.2 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.3 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.3 (2026-11-09) — Extension Arc 분할 생성 (응답 잘림 수정)
+  · [사고] "2번 끊겼어. 또 해도 끊길 거 같은데" — Extension 50화 한 번 요청이 64,000토큰에서 잘림
+  · 뼈대(회차당 한 줄) → 10화씩 생성. 구간마다 session_state에 저장
+  · 구간 응답 검증: 범위 밖·중복 회차 제거, 앞에서부터 빈틈없이 이어진 회차만 채택.
+    한 구간을 두 번 연속 못 받으면 멈추고 그때까지 저장
+  · '▶ 이어서 생성' 버튼 — 저장된 마지막 회차 다음부터 (이미 있는 51~85화를 살려 86화부터)
+  · extension_outline을 백업 키에 추가
 v2.12.2 (2026-11-07) — 배포 후 ImportError 수정 (오래된 모듈 캐시)
   · [사고] Streamlit Cloud 로그: v2.9.0 배포(11-06 14:38 UTC)부터
     "ImportError: cannot import name 'WORLD_TYPES' from 'prompt'" 반복.
@@ -340,6 +347,8 @@ from prompt import (
     build_augment_concept_prompt,
     build_core_arc_prompt,
     build_extension_arc_prompt,
+    build_extension_outline_prompt,   # v2.12.3
+    EXTENSION_CHUNK_SIZE,             # v2.12.3
     build_plant_payoff_prompt,
     build_character_bible_prompt,
     build_episode_plot_prompt,
@@ -856,6 +865,7 @@ defaults = {
     "core_arc": [],
     "core_arc_summaries": [],
     "extension_arc": [],
+    "extension_outline": [],      # v2.12.3
     "extension_mode": "bridge",
     "extension_eps": 50,
     "plant_map_core": {},
@@ -922,7 +932,7 @@ with st.expander("🎬 프로듀서 노트 (전역 적용)", expanded=False):
 # ══════════════════════════════════════════════
 PROJECT_KEYS = [
     "concept_card", "core_arc", "core_arc_summaries",
-    "extension_arc", "extension_mode", "extension_eps",
+    "extension_arc", "extension_mode", "extension_eps", "extension_outline",
     "plant_map_core", "plant_map_extension", "character_bible",
     "episode_plots", "episodes_19", "episodes_15",
     "episode_summaries", "quality_reports",
@@ -2308,25 +2318,105 @@ with tab2:
                     "Extension 회차 수", 30, 100, st.session_state.extension_eps, 5,
                 )
 
-                if st.button("🌿 Extension Arc 생성", use_container_width=True):
+                # ──── v2.12.3: 뼈대 → 10화씩 분할 생성 · 구간마다 저장 · 이어서 생성 ────
+                _ext_start = len(st.session_state.core_arc) + 1
+                _ext_total = int(st.session_state.extension_eps)
+                _ext_end = _ext_start + _ext_total - 1
+                _ext_have = [e for e in (st.session_state.extension_arc or []) if isinstance(e, dict)]
+                _ext_done = len(_ext_have)
+                st.caption(
+                    f"EP{_ext_start}~EP{_ext_end}을 {EXTENSION_CHUNK_SIZE}화씩 나눠 만듭니다. "
+                    "구간이 끝날 때마다 저장되므로 중간에 끊겨도 '이어서 생성'으로 계속할 수 있습니다."
+                )
+
+                def _ext_generate(from_scratch):
                     core_arc_text = json.dumps(st.session_state.core_arc, ensure_ascii=False)
-                    with st.spinner("Extension 설계 중..."):
-                        raw = call_claude_opus(
+                    _cc = st.session_state.concept_card
+                    _mode = st.session_state.extension_mode
+                    _pn = st.session_state.producer_note
+                    if from_scratch:
+                        st.session_state.extension_arc = []
+                        st.session_state.pop("extension_outline", None)
+                    _arc = list(st.session_state.extension_arc or [])
+                    _outline = st.session_state.get("extension_outline") or []
+                    if not _outline:
+                        with st.spinner("① Extension 뼈대 설계 중..."):
+                            _o = safe_json(call_claude_opus(
+                                build_extension_outline_prompt(
+                                    _cc, core_arc_text, _mode, _ext_total, _ext_start, _pn),
+                                max_tokens=MAX_TOKENS_EPISODE,
+                            ))
+                        _outline = [x for x in (_o or []) if isinstance(x, dict)] if isinstance(_o, list) else []
+                        st.session_state.extension_outline = _outline
+                    _outline_txt = "\n".join(
+                        f"EP{x.get('ep')} [{x.get('act', '')}] {x.get('title', '')} — {x.get('one_line', '')}"
+                        for x in _outline
+                    )
+                    _prog = st.progress(0.0, text="Extension 생성 중...")
+                    _fails = 0
+                    while len(_arc) < _ext_total:
+                        _s = _ext_start + len(_arc)
+                        _e = min(_s + EXTENSION_CHUNK_SIZE - 1, _ext_end)
+                        _prev = _arc[-EXTENSION_CHUNK_SIZE:]
+                        _older = _arc[:-EXTENSION_CHUNK_SIZE]
+                        _prev_txt = "\n".join(
+                            f"EP{x.get('ep')} {x.get('title', '')} — 클리프행어: {x.get('cliffhanger', '')}"
+                            for x in _older
+                        )
+                        if _prev:
+                            _prev_txt += ("\n" if _prev_txt else "") + json.dumps(_prev, ensure_ascii=False)
+                        _prog.progress(len(_arc) / _ext_total, text=f"② EP{_s}~EP{_e} 설계 중...")
+                        _p = safe_json(call_claude_opus(
                             build_extension_arc_prompt(
-                                st.session_state.concept_card,
-                                core_arc_text,
-                                extension_mode=st.session_state.extension_mode,
-                                extension_eps=st.session_state.extension_eps,
-                                producer_note=st.session_state.producer_note,
+                                _cc, core_arc_text, extension_mode=_mode, extension_eps=_ext_total,
+                                producer_note=_pn, outline_text=_outline_txt,
+                                prev_eps_text=_prev_txt, ep_start=_s, ep_end=_e,
                             ),
                             max_tokens=MAX_TOKENS_ARC,
+                        ))
+                        _got = [x for x in (_p or []) if isinstance(x, dict)] if isinstance(_p, list) else []
+                        # 구간 밖·중복 회차 제거, 번호 순으로
+                        _got = sorted(
+                            [x for x in _got if str(x.get("ep", "")).isdigit() and _s <= int(x["ep"]) <= _e],
+                            key=lambda x: int(x["ep"]),
                         )
-                        parsed = safe_json(raw)
-                        if parsed and isinstance(parsed, list):
-                            st.session_state.extension_arc = parsed
-                            st.success(f"✅ Extension {len(parsed)}화 생성 완료")
-                        else:
-                            st.error("❌ 생성 실패")
+                        _seen, _clean = set(), []
+                        for x in _got:
+                            if int(x["ep"]) not in _seen:
+                                _seen.add(int(x["ep"]))
+                                _clean.append(x)
+                        # 앞에서부터 빈틈없이 이어지는 회차만 채택
+                        _take = []
+                        for k, x in enumerate(_clean):
+                            if int(x["ep"]) == _s + k:
+                                _take.append(x)
+                            else:
+                                break
+                        if not _take:
+                            _fails += 1
+                            if _fails >= 2:
+                                st.error(f"EP{_s}~EP{_e} 구간을 두 번 연속 받지 못했습니다. "
+                                         f"지금까지 {len(_arc)}화는 저장되어 있습니다. '이어서 생성'을 눌러 주세요.")
+                                break
+                            continue
+                        _fails = 0
+                        _arc += _take
+                        st.session_state.extension_arc = _arc
+                    _prog.progress(min(1.0, len(_arc) / _ext_total), text=f"Extension {len(_arc)}/{_ext_total}화")
+                    if len(_arc) >= _ext_total:
+                        st.success(f"✅ Extension {len(_arc)}화 생성 완료 (EP{_ext_start}~EP{_ext_start + len(_arc) - 1})")
+
+                _eb1, _eb2 = st.columns(2)
+                with _eb1:
+                    if st.button("🌿 Extension Arc 새로 생성", use_container_width=True, key="ext_new"):
+                        _ext_generate(from_scratch=True)
+                with _eb2:
+                    _can_resume = 0 < _ext_done < _ext_total
+                    if st.button(
+                        f"▶ 이어서 생성 (EP{_ext_start + _ext_done}부터)" if _can_resume else "▶ 이어서 생성",
+                        use_container_width=True, key="ext_resume", disabled=not _can_resume,
+                    ):
+                        _ext_generate(from_scratch=False)
 
                 if st.session_state.extension_arc:
                     st.markdown(f"**Extension {len(st.session_state.extension_arc)}화 생성됨**")
