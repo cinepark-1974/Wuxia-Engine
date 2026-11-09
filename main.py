@@ -311,6 +311,7 @@ v2.0 (2026-05) — Quality Validator + IdeaSeed System
 v1.0 (2026-XX) — 초기 무협 엔진
 """
 import streamlit as st
+from bj_header import render_header  # 공통 헤더 (Writer Engine 기준)
 import anthropic
 import json
 import re
@@ -626,13 +627,7 @@ textarea { font-family: var(--body) !important; font-size: 0.9rem !important; }
 # ══════════════════════════════════════════════
 # Brand Header
 # ══════════════════════════════════════════════
-st.markdown("""
-<div class="brand-header">
-    <div class="company">BLUE JEANS PICTURES</div>
-    <div class="engine">WUXIA ENGINE</div>
-    <div class="tagline">YOUNG · VINTAGE · FREE · INNOVATIVE</div>
-</div>
-""", unsafe_allow_html=True)
+render_header("WUXIA ENGINE")
 
 
 # ══════════════════════════════════════════════
