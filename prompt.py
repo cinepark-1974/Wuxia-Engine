@@ -1,10 +1,17 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.12.3 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.4 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.4 (2026-11-09) — Core Arc도 분할 생성
+  · [작가 지적] "처음 50화 분량도 쪼개서 해야 하는 거 아니고?" — 같은 잘림 위험
+  · build_core_arc_outline_prompt() — 전체 뼈대 (재료는 Core Arc와 동일, 출력만 회차당 한 줄)
+  · build_core_arc_prompt(mode="chunk", ep_start, ep_end, outline_text, prev_eps_text).
+    재료 블록(공식·모티프·스토리라인·초식 바이블·작가 방향)은 구간마다 그대로 들어간다.
+    mode 없이 부르면 예전처럼 한 번에 (하위 호환)
+  · ARC_CHUNK_SIZE = 10 (Core·Extension 공통)
 v2.12.3 (2026-11-09) — Extension Arc 분할 생성 (응답 잘림 수정)
   · [사고] Extension 50화를 한 번에 요청 → 64,000토큰 한도에서 잘림 (26화·35화에서 끊김).
     출력 JSON은 2만 자 남짓 — 한도의 대부분을 사고(thinking) 토큰이 썼다
@@ -12,6 +19,7 @@ v2.12.3 (2026-11-09) — Extension Arc 분할 생성 (응답 잘림 수정)
   · build_extension_arc_prompt(ep_start, ep_end, outline_text, prev_eps_text) — 10화씩
     (EXTENSION_CHUNK_SIZE). 인자 없이 부르면 예전처럼 한 번에 (하위 호환)
   · Extension에도 작가 방향 블록·세계 유형 블록 주입 (Core Arc와 같은 기준)
+
 v2.12.2 (2026-11-07) — 배포 후 ImportError 수정 (main.py 모듈 최신화, 룰 변경 없음)
 v2.12.1 (2026-11-07) — 집필 플랫폼 기본값 문피아 (main.py UI 변경, 룰 변경 없음)
 v2.12.0 (2026-11-07) — 최고의 무협 기준표 (객관 점검 · 점수 없음)
@@ -310,7 +318,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.12.3"
+ENGINE_VERSION = "v2.12.4"
 ENGINE_BUILD_DATE = "2026-11-07"
 
 # ═══════════════════════════════════════════════════
@@ -4828,10 +4836,14 @@ def normalize_motif_list(motifs):
 def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
                           style_dna="", style_strength="중",
                           storyline_acts=None, martial_bible=None,
-                          canon_excerpt=""):
+                          canon_excerpt="", mode=None, outline_text="",
+                          prev_eps_text="", ep_start=None, ep_end=None):
     """Core Arc 50화 생성.
 
     v2.4.0: 기획서 막 구조(storyline_acts)와 초식 바이블을 재료로 주입.
+    v2.12.3: mode="outline" → 전체 뼈대(회차당 한 줄),
+             mode="chunk"   → ep_start~ep_end 구간만 (outline_text·prev_eps_text 참조).
+             mode=None      → 예전처럼 한 번에 (하위 호환)
     """
     formula_key = concept_card.get("formula_key", "")
     protagonist_type_key = concept_card.get("protagonist_type", "")
@@ -4878,6 +4890,8 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
 
 {CORE_ARC_DESIGN}
 
+{_core_arc_task_block(mode, core_eps, outline_text, prev_eps_text, ep_start, ep_end)}
+
 ## 출력 형식
 각 회차별로 아래 JSON 배열 형식:
 
@@ -4895,10 +4909,53 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
   ...
 ]
 
-{core_eps}개 회차를 빠짐없이 작성. JSON 배열만 반환."""
+{_core_arc_count_line(mode, core_eps, ep_start, ep_end)}"""
 
 
-EXTENSION_CHUNK_SIZE = 10   # v2.12.3 — Extension은 10화씩 나눠 생성 (출력 한도 회피)
+def _core_arc_task_block(mode, core_eps, outline_text, prev_eps_text, ep_start, ep_end):
+    """v2.12.3 — Core Arc 분할 생성용 작업 지시."""
+    if mode == "chunk" and ep_start and ep_end:
+        out = []
+        if outline_text:
+            out.append(f"## Core Arc 전체 뼈대 (이 흐름을 따른다)\n{outline_text}")
+        if prev_eps_text:
+            out.append(f"## 이미 설계된 회차 (이어서 쓴다 · 반복 금지)\n{prev_eps_text}")
+        out.append(f"## 이번 작업\n전체 {core_eps}화 중 **EP{ep_start}~EP{ep_end}만** 설계한다. "
+                   "직전 회차의 클리프행어를 이어받고, 뼈대의 해당 회차 사건을 구체 장면으로 채운다.")
+        return "\n\n".join(out)
+    return ""
+
+
+def _core_arc_count_line(mode, core_eps, ep_start, ep_end):
+    if mode == "outline":
+        return ""
+    if mode == "chunk" and ep_start and ep_end:
+        return (f"{ep_end - ep_start + 1}개 회차 (\"ep\"는 {ep_start}부터 {ep_end}까지)를 빠짐없이 작성. "
+                "JSON 배열만 반환.")
+    return f"{core_eps}개 회차를 빠짐없이 작성. JSON 배열만 반환."
+
+
+def build_core_arc_outline_prompt(concept_card, core_eps=50, producer_note="",
+                                  storyline_acts=None, martial_bible=None, canon_excerpt=""):
+    """v2.12.3 — Core Arc 전체 뼈대. 재료는 Core Arc와 같고, 출력만 회차당 한 줄."""
+    full = build_core_arc_prompt(concept_card, core_eps=core_eps, producer_note=producer_note,
+                                 storyline_acts=storyline_acts, martial_bible=martial_bible,
+                                 canon_excerpt=canon_excerpt, mode="outline")
+    head = full.split("## 출력 형식\n각 회차별로")[0]
+    return f"""{head}
+## 이번 작업 — 뼈대만
+EP1~EP{core_eps} 전체의 **뼈대만** 설계한다. 회차마다 한 줄. 막 구분과 막의 목표,
+떡밥을 심는 회차와 거두는 회차가 드러나야 한다. 본 설계는 다음 단계에서 10화씩 채운다.
+
+## 출력 — JSON 배열만 ({core_eps}개, 순서대로)
+[{{"ep": 1, "act": "막 이름", "title": "회차 제목", "one_line": "핵심 사건 한 문장"}}]
+JSON 외 텍스트 금지."""
+
+
+ARC_CHUNK_SIZE = 10   # v2.12.3 — Core·Extension 공통 분할 단위
+
+
+EXTENSION_CHUNK_SIZE = ARC_CHUNK_SIZE   # v2.12.3 — Extension은 10화씩 나눠 생성 (출력 한도 회피)
 
 
 def _extension_common_head(concept_card, core_arc_text, extension_mode, producer_note,

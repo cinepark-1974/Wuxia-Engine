@@ -1,9 +1,14 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.12.3 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.4 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.4 (2026-11-09) — Core Arc도 분할 생성
+  · STEP 2 ① Core Arc: 뼈대 → 10화씩, 구간마다 저장, '▶ 이어서 생성 (EPn부터)'
+  · generate_arc_chunked() — Core·Extension 공용 분할 생성 함수 (구간 검증·2회 실패 시 정지)
+  · 이어 쓰기 맥락: 직전 10화 전문 + 그 이전 회차는 제목·클리프행어 요약
+  · core_outline 세션·백업 키 추가
 v2.12.3 (2026-11-09) — Extension Arc 분할 생성 (응답 잘림 수정)
   · [사고] "2번 끊겼어. 또 해도 끊길 거 같은데" — Extension 50화 한 번 요청이 64,000토큰에서 잘림
   · 뼈대(회차당 한 줄) → 10화씩 생성. 구간마다 session_state에 저장
@@ -11,6 +16,7 @@ v2.12.3 (2026-11-09) — Extension Arc 분할 생성 (응답 잘림 수정)
     한 구간을 두 번 연속 못 받으면 멈추고 그때까지 저장
   · '▶ 이어서 생성' 버튼 — 저장된 마지막 회차 다음부터 (이미 있는 51~85화를 살려 86화부터)
   · extension_outline을 백업 키에 추가
+
 v2.12.2 (2026-11-07) — 배포 후 ImportError 수정 (오래된 모듈 캐시)
   · [사고] Streamlit Cloud 로그: v2.9.0 배포(11-06 14:38 UTC)부터
     "ImportError: cannot import name 'WORLD_TYPES' from 'prompt'" 반복.
@@ -348,6 +354,8 @@ from prompt import (
     build_core_arc_prompt,
     build_extension_arc_prompt,
     build_extension_outline_prompt,   # v2.12.3
+    build_core_arc_outline_prompt,    # v2.12.3
+    ARC_CHUNK_SIZE,                   # v2.12.3
     EXTENSION_CHUNK_SIZE,             # v2.12.3
     build_plant_payoff_prompt,
     build_character_bible_prompt,
@@ -685,6 +693,74 @@ def call_claude_opus(prompt, max_tokens=MAX_TOKENS_EPISODE, system=None):
     return call_claude(prompt, max_tokens=max_tokens, model=MODEL_OPUS, system=system)
 
 
+def generate_arc_chunked(state_key, outline_key, ep_start, total, outline_prompt_fn,
+                         chunk_prompt_fn, from_scratch, label="Arc"):
+    """v2.12.3 — Arc 분할 생성 (Core·Extension 공통).
+
+    뼈대 1회 → ARC_CHUNK_SIZE화씩 생성. 구간마다 st.session_state[state_key]에 저장한다.
+    구간 응답은 범위 밖·중복을 버리고 앞에서부터 빈틈없이 이어진 회차만 채택한다.
+    같은 구간을 두 번 연속 못 받으면 멈춘다 (저장된 회차는 남는다).
+    Returns: 저장된 회차 수
+    """
+    ep_end = ep_start + total - 1
+    if from_scratch:
+        st.session_state[state_key] = []
+        st.session_state[outline_key] = []
+    arc = [x for x in (st.session_state.get(state_key) or []) if isinstance(x, dict)]
+    outline = st.session_state.get(outline_key) or []
+    if not outline:
+        with st.spinner(f"① {label} 뼈대 설계 중..."):
+            o = safe_json(call_claude_opus(outline_prompt_fn(), max_tokens=MAX_TOKENS_EPISODE))
+        outline = [x for x in o if isinstance(x, dict)] if isinstance(o, list) else []
+        st.session_state[outline_key] = outline
+    outline_txt = "\n".join(
+        f"EP{x.get('ep')} [{x.get('act', '')}] {x.get('title', '')} — {x.get('one_line', '')}"
+        for x in outline
+    )
+    prog = st.progress(0.0, text=f"{label} 생성 중...")
+    fails = 0
+    while len(arc) < total:
+        s_ep = ep_start + len(arc)
+        e_ep = min(s_ep + ARC_CHUNK_SIZE - 1, ep_end)
+        prev, older = arc[-ARC_CHUNK_SIZE:], arc[:-ARC_CHUNK_SIZE]
+        prev_txt = "\n".join(
+            f"EP{x.get('ep')} {x.get('title', '')} — 클리프행어: {x.get('cliffhanger', '')}" for x in older
+        )
+        if prev:
+            prev_txt += ("\n" if prev_txt else "") + json.dumps(prev, ensure_ascii=False)
+        prog.progress(len(arc) / total, text=f"② {label} EP{s_ep}~EP{e_ep} 설계 중...")
+        p = safe_json(call_claude_opus(chunk_prompt_fn(s_ep, e_ep, outline_txt, prev_txt),
+                                       max_tokens=MAX_TOKENS_ARC))
+        got = [x for x in p if isinstance(x, dict)] if isinstance(p, list) else []
+        got = sorted([x for x in got if str(x.get("ep", "")).isdigit() and s_ep <= int(x["ep"]) <= e_ep],
+                     key=lambda x: int(x["ep"]))
+        take, seen = [], set()
+        for x in got:
+            n = int(x["ep"])
+            if n in seen:
+                continue
+            seen.add(n)
+            if n == s_ep + len(take):
+                x["ep"] = n
+                take.append(x)
+            else:
+                break
+        if not take:
+            fails += 1
+            if fails >= 2:
+                st.error(f"{label} EP{s_ep}~EP{e_ep} 구간을 두 번 연속 받지 못했습니다. "
+                         f"지금까지 {len(arc)}화는 저장되어 있습니다. '이어서 생성'을 눌러 주세요.")
+                break
+            continue
+        fails = 0
+        arc += take
+        st.session_state[state_key] = arc
+    prog.progress(min(1.0, len(arc) / total), text=f"{label} {len(arc)}/{total}화")
+    if len(arc) >= total:
+        st.success(f"✅ {label} {len(arc)}화 생성 완료 (EP{ep_start}~EP{ep_start + len(arc) - 1})")
+    return len(arc)
+
+
 def safe_json(raw, debug=False):
     """JSON 추출 & 파싱 — v2.0 강화판.
 
@@ -866,6 +942,7 @@ defaults = {
     "core_arc_summaries": [],
     "extension_arc": [],
     "extension_outline": [],      # v2.12.3
+    "core_outline": [],           # v2.12.3
     "extension_mode": "bridge",
     "extension_eps": 50,
     "plant_map_core": {},
@@ -932,7 +1009,7 @@ with st.expander("🎬 프로듀서 노트 (전역 적용)", expanded=False):
 # ══════════════════════════════════════════════
 PROJECT_KEYS = [
     "concept_card", "core_arc", "core_arc_summaries",
-    "extension_arc", "extension_mode", "extension_eps", "extension_outline",
+    "extension_arc", "extension_mode", "extension_eps", "extension_outline", "core_outline",
     "plant_map_core", "plant_map_extension", "character_bible",
     "episode_plots", "episodes_19", "episodes_15",
     "episode_summaries", "quality_reports",
@@ -2238,50 +2315,46 @@ with tab2:
                     value=st.session_state.style_strength,
                 )
 
-            if st.button("🎬 Core Arc 생성", use_container_width=True):
-                with st.spinner(f"{core_eps}화 비트 설계 중... (Opus 사용, 1~2분 소요)"):
-                    raw = call_claude_opus(
-                        build_core_arc_prompt(
-                            st.session_state.concept_card,
-                            core_eps=core_eps,
-                            producer_note=st.session_state.producer_note,
-                            style_dna=st.session_state.style_dna,
-                            style_strength=st.session_state.style_strength,
-                            storyline_acts=st.session_state.storyline_acts,
-                            martial_bible=st.session_state.martial_bible,
-                            canon_excerpt=build_canon_excerpt(_canon_episodes()),  # v2.10.0
-                        ),
-                        max_tokens=MAX_TOKENS_ARC,
-                    )
-                    parsed, parse_info = safe_json(raw, debug=True)
-                    if parsed and isinstance(parsed, list) and len(parsed) > 0:
-                        st.session_state.core_arc = parsed
-                        _stamp("core_arc")  # v2.10.0 기획서 버전 기록
-                        if len(parsed) < core_eps:
-                            st.warning(
-                                f"⚠️ {len(parsed)}화만 생성되었습니다 (요청: {core_eps}화). "
-                                "응답이 중간에 잘렸을 수 있습니다. 다시 생성하거나 회차 수를 줄여 시도해 주세요."
-                            )
-                        else:
-                            st.success(f"✅ Core Arc {len(parsed)}화 생성 완료")
-                    else:
-                        st.error(
-                            "❌ Arc 생성 실패 — 응답을 JSON으로 해석하지 못했습니다. "
-                            "잠시 후 다시 시도하거나, 회차 수를 줄여 주세요."
-                        )
-                        with st.expander("원본 응답 (디버그)"):
-                            st.markdown(
-                                f"**응답 길이:** {parse_info.get('raw_length', 0):,}자 · "
-                                f"**실패 단계:** {parse_info.get('stage_failed', '?')} · "
-                                f"**에러:** {parse_info.get('error', '?')}"
-                            )
-                            if raw:
-                                st.markdown("**앞부분 (2,000자):**")
-                                st.text(raw[:2000])
-                                st.markdown("**끝부분 (2,000자):**")
-                                st.text(raw[-2000:])
-                            else:
-                                st.text("(빈 응답)")
+            # ──── v2.12.3: Core Arc도 뼈대 → 10화씩 분할 생성 ────
+            st.caption(
+                f"EP1~EP{core_eps}을 {ARC_CHUNK_SIZE}화씩 나눠 만듭니다 (Opus). 구간이 끝날 때마다 "
+                "저장되므로 중간에 끊겨도 '이어서 생성'으로 계속할 수 있습니다."
+            )
+            _core_done = len([x for x in (st.session_state.core_arc or []) if isinstance(x, dict)])
+
+            def _core_generate(from_scratch):
+                _cc = st.session_state.concept_card
+                _common = dict(
+                    core_eps=core_eps,
+                    producer_note=st.session_state.producer_note,
+                    storyline_acts=st.session_state.storyline_acts,
+                    martial_bible=st.session_state.martial_bible,
+                    canon_excerpt=build_canon_excerpt(_canon_episodes()),  # v2.10.0
+                )
+                _n = generate_arc_chunked(
+                    "core_arc", "core_outline", 1, core_eps,
+                    lambda: build_core_arc_outline_prompt(_cc, **_common),
+                    lambda a, b, o, p: build_core_arc_prompt(
+                        _cc, style_dna=st.session_state.style_dna,
+                        style_strength=st.session_state.style_strength,
+                        mode="chunk", outline_text=o, prev_eps_text=p,
+                        ep_start=a, ep_end=b, **_common),
+                    from_scratch, label="Core Arc",
+                )
+                if _n:
+                    _stamp("core_arc")  # v2.10.0 기획서 버전 기록
+
+            _cb1, _cb2 = st.columns(2)
+            with _cb1:
+                if st.button("🎬 Core Arc 새로 생성", use_container_width=True, key="core_new"):
+                    _core_generate(from_scratch=True)
+            with _cb2:
+                _core_resume = 0 < _core_done < core_eps
+                if st.button(
+                    f"▶ 이어서 생성 (EP{_core_done + 1}부터)" if _core_resume else "▶ 이어서 생성",
+                    use_container_width=True, key="core_resume", disabled=not _core_resume,
+                ):
+                    _core_generate(from_scratch=False)
 
             if st.session_state.core_arc:
                 st.markdown(f"**총 {len(st.session_state.core_arc)}화 설계 완료**")
@@ -2334,77 +2407,16 @@ with tab2:
                     _cc = st.session_state.concept_card
                     _mode = st.session_state.extension_mode
                     _pn = st.session_state.producer_note
-                    if from_scratch:
-                        st.session_state.extension_arc = []
-                        st.session_state.pop("extension_outline", None)
-                    _arc = list(st.session_state.extension_arc or [])
-                    _outline = st.session_state.get("extension_outline") or []
-                    if not _outline:
-                        with st.spinner("① Extension 뼈대 설계 중..."):
-                            _o = safe_json(call_claude_opus(
-                                build_extension_outline_prompt(
-                                    _cc, core_arc_text, _mode, _ext_total, _ext_start, _pn),
-                                max_tokens=MAX_TOKENS_EPISODE,
-                            ))
-                        _outline = [x for x in (_o or []) if isinstance(x, dict)] if isinstance(_o, list) else []
-                        st.session_state.extension_outline = _outline
-                    _outline_txt = "\n".join(
-                        f"EP{x.get('ep')} [{x.get('act', '')}] {x.get('title', '')} — {x.get('one_line', '')}"
-                        for x in _outline
+                    generate_arc_chunked(
+                        "extension_arc", "extension_outline", _ext_start, _ext_total,
+                        lambda: build_extension_outline_prompt(
+                            _cc, core_arc_text, _mode, _ext_total, _ext_start, _pn),
+                        lambda a, b, o, p: build_extension_arc_prompt(
+                            _cc, core_arc_text, extension_mode=_mode, extension_eps=_ext_total,
+                            producer_note=_pn, outline_text=o, prev_eps_text=p,
+                            ep_start=a, ep_end=b),
+                        from_scratch, label="Extension",
                     )
-                    _prog = st.progress(0.0, text="Extension 생성 중...")
-                    _fails = 0
-                    while len(_arc) < _ext_total:
-                        _s = _ext_start + len(_arc)
-                        _e = min(_s + EXTENSION_CHUNK_SIZE - 1, _ext_end)
-                        _prev = _arc[-EXTENSION_CHUNK_SIZE:]
-                        _older = _arc[:-EXTENSION_CHUNK_SIZE]
-                        _prev_txt = "\n".join(
-                            f"EP{x.get('ep')} {x.get('title', '')} — 클리프행어: {x.get('cliffhanger', '')}"
-                            for x in _older
-                        )
-                        if _prev:
-                            _prev_txt += ("\n" if _prev_txt else "") + json.dumps(_prev, ensure_ascii=False)
-                        _prog.progress(len(_arc) / _ext_total, text=f"② EP{_s}~EP{_e} 설계 중...")
-                        _p = safe_json(call_claude_opus(
-                            build_extension_arc_prompt(
-                                _cc, core_arc_text, extension_mode=_mode, extension_eps=_ext_total,
-                                producer_note=_pn, outline_text=_outline_txt,
-                                prev_eps_text=_prev_txt, ep_start=_s, ep_end=_e,
-                            ),
-                            max_tokens=MAX_TOKENS_ARC,
-                        ))
-                        _got = [x for x in (_p or []) if isinstance(x, dict)] if isinstance(_p, list) else []
-                        # 구간 밖·중복 회차 제거, 번호 순으로
-                        _got = sorted(
-                            [x for x in _got if str(x.get("ep", "")).isdigit() and _s <= int(x["ep"]) <= _e],
-                            key=lambda x: int(x["ep"]),
-                        )
-                        _seen, _clean = set(), []
-                        for x in _got:
-                            if int(x["ep"]) not in _seen:
-                                _seen.add(int(x["ep"]))
-                                _clean.append(x)
-                        # 앞에서부터 빈틈없이 이어지는 회차만 채택
-                        _take = []
-                        for k, x in enumerate(_clean):
-                            if int(x["ep"]) == _s + k:
-                                _take.append(x)
-                            else:
-                                break
-                        if not _take:
-                            _fails += 1
-                            if _fails >= 2:
-                                st.error(f"EP{_s}~EP{_e} 구간을 두 번 연속 받지 못했습니다. "
-                                         f"지금까지 {len(_arc)}화는 저장되어 있습니다. '이어서 생성'을 눌러 주세요.")
-                                break
-                            continue
-                        _fails = 0
-                        _arc += _take
-                        st.session_state.extension_arc = _arc
-                    _prog.progress(min(1.0, len(_arc) / _ext_total), text=f"Extension {len(_arc)}/{_ext_total}화")
-                    if len(_arc) >= _ext_total:
-                        st.success(f"✅ Extension {len(_arc)}화 생성 완료 (EP{_ext_start}~EP{_ext_start + len(_arc) - 1})")
 
                 _eb1, _eb2 = st.columns(2)
                 with _eb1:
