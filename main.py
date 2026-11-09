@@ -627,7 +627,7 @@ textarea { font-family: var(--body) !important; font-size: 0.9rem !important; }
 # ══════════════════════════════════════════════
 # Brand Header
 # ══════════════════════════════════════════════
-render_header("WUXIA ENGINE")
+render_header("WUXIA ENGINE", tagline="MARTIAL ARTS FICTION")
 
 
 # ══════════════════════════════════════════════
