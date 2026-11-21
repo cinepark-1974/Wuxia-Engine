@@ -1,9 +1,16 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.13.1 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.13.2 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.13.2 (2026-11-21) — 몰아쓰기 끊김 자동 재개
+  · [사고] 실제 앱에서 EP2~15 몰아쓰기가 EP3 직후 멈춤 (Core Arc 30화 끊김과 같은 양상:
+    10~15분쯤 화면이 다시 실행되며 진행 중이던 반복이 잘림)
+  · 몰아쓰기 계획(대상·완료 회차·등급·플랫폼·판정·Arc)을 batch_active에 남기고,
+    화면이 다시 실행될 때마다 남은 회차부터 자동으로 이어 간다. 중간에 끊긴 회차는 처음부터 다시 쓴다
+  · '⏹ 몰아쓰기 중지' 버튼 — 계획을 지운다 (끝난 회차는 남음)
+  · 진행 중에는 시작 버튼 비활성, '이어서 진행 중' 안내 표시
 v2.13.1 (2026-11-21) — 몰아쓰기 '끝 회차 지정'
   · [작가 요청] "15화까지 원고 생성해" — 5/10/20화 단위로는 정확한 회차에서 멈출 수 없었다
   · 회차 수에 '끝 회차 지정' 추가: 시작~끝 회차 범위만 쓴다 (건너뛰기 설정은 그대로 적용)
@@ -975,6 +982,7 @@ defaults = {
     "bundle_downloaded": [],      # v2.13.0 — 받은 묶음 ("15금:1-5")
     "batch_log": [],              # v2.13.0 — 마지막 몰아쓰기 결과
     "bundle_unit_val": 5,         # v2.13.0
+    "batch_active": None,         # v2.13.2 — 진행 중인 몰아쓰기 계획 (세션 전용, 백업 제외)
     "extension_mode": "bridge",
     "extension_eps": 50,
     "plant_map_core": {},
@@ -3091,21 +3099,50 @@ with tab3:
                                f"{rating} · {platform} · 예상 {len(_b_targets) * 6}분 안팎")
                 else:
                     st.caption("집필할 회차가 없습니다.")
+                # v2.13.2: 몰아쓰기 계획을 세션에 남겨, 연결이 끊겨 화면이 다시 실행돼도 남은 회차부터 이어 간다
+                _bact = st.session_state.get("batch_active")
+                if _bact and st.button("⏹ 몰아쓰기 중지 (끝난 회차는 남습니다)", use_container_width=True,
+                                       key="batch_stop"):
+                    st.session_state.batch_active = None
+                    _bact = None
+                    st.rerun()
                 if st.button("⚡ 몰아쓰기 시작", type="primary", use_container_width=True,
-                             key="batch_go", disabled=not _b_targets):
-                    _b_log = []
-                    _b_prog = st.progress(0.0, text="몰아쓰기 시작")
-                    for _i, _e in enumerate(_b_targets):
-                        _b_prog.progress(_i / len(_b_targets),
-                                         text=f"EP{_e} 집필 중 ({_i + 1}/{len(_b_targets)}) — 플롯 → 본문 → 요약 → 기준표")
-                        _r = write_episode_pipeline(_e, target_arc, arc_source, rating, platform, judge=_b_judge)
-                        _b_log.append(_r)
+                             key="batch_go", disabled=not _b_targets or bool(_bact)):
+                    st.session_state.batch_active = {
+                        "targets": list(_b_targets), "done": [], "rating": rating, "platform": platform,
+                        "judge": bool(_b_judge), "arc": arc_source,
+                    }
+                    st.session_state.batch_log = []
+                    _bact = st.session_state.batch_active
+                if _bact:
+                    _b_rating, _b_plat = _bact["rating"], _bact["platform"]
+                    _b_arc = (st.session_state.core_arc if _bact["arc"] == "Core Arc"
+                              else st.session_state.extension_arc)
+                    _b_all = _bact["targets"]
+                    _b_remain = [e for e in _b_all if e not in _bact["done"]]
+                    if _bact["done"]:
+                        st.info(f"⚡ 몰아쓰기 이어서 진행 중 — EP{_b_remain[0] if _b_remain else '-'}부터 "
+                                f"({len(_bact['done'])}/{len(_b_all)}화 완료). 연결이 끊겨도 남은 회차부터 이어 갑니다.")
+                    _b_prog = st.progress(len(_bact["done"]) / max(1, len(_b_all)), text="몰아쓰기 진행 중")
+                    _b_log = list(st.session_state.get("batch_log") or [])
+                    _b_failed = False
+                    for _e in _b_remain:
+                        _k = len(_bact["done"]) + 1
+                        _b_prog.progress((_k - 1) / len(_b_all),
+                                         text=f"EP{_e} 집필 중 ({_k}/{len(_b_all)}) — 플롯 → 본문 → 요약 → 기준표")
+                        _r = write_episode_pipeline(_e, _b_arc, _bact["arc"], _b_rating, _b_plat, judge=_bact["judge"])
+                        _b_log = [x for x in _b_log if x.get("ep") != _e] + [_r]
                         st.session_state.batch_log = _b_log
                         if _r["status"] != "ok":
                             st.error(f"EP{_e}에서 멈췄습니다 — {_r['error']}. 그 앞 회차까지는 저장되어 있습니다.")
+                            _b_failed = True
                             break
-                    _b_prog.progress(1.0, text=f"몰아쓰기 끝 — {sum(1 for r in _b_log if r['status'] == 'ok')}화 완료")
-                    st.rerun()
+                        _bact["done"].append(_e)
+                        st.session_state.batch_active = _bact
+                    st.session_state.batch_active = None
+                    _b_prog.progress(1.0, text=f"몰아쓰기 끝 — {len(_bact['done'])}/{len(_b_all)}화 완료")
+                    if not _b_failed:
+                        st.rerun()
                 _blog = st.session_state.get("batch_log") or []
                 if _blog:
                     st.markdown("**마지막 몰아쓰기 결과**")
