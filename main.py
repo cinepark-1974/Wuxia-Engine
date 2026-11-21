@@ -1,9 +1,12 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.14.1 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.14.2 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.14.2 (2026-11-22) — 분량 압축 (상한 초과)
+  · fix_episode_pipeline ④: 상한을 넘으면 덜어 낼 문장 목록을 받아 원문과 정확히 일치하는 문장만 삭제.
+    마지막 장면(끝 12%)은 삭제 대상에서 제외, 결과가 하한+200자 아래면 반려. 압축 전 원고는 버전으로 남음
 v2.14.1 (2026-11-21) — 보정 실패 시 정지
   · [사고] 실제 앱에서 일괄 보정 13화가 'API 잔액 부족(400)'으로 모두 실패하며 끝까지 헛돎
   · 한 회차가 실패하면 일괄 보정을 멈추고 이유를 표시. 실패 회차의 글자 수 표시를 '→0'에서 원래 값으로
@@ -466,6 +469,7 @@ from prompt import (
     # v2.14.0 신규 — 기준 미달 보정
     build_length_extend_prompt,
     build_k1_fix_prompt,
+    build_length_trim_prompt,   # v2.14.2
     build_narrative_devices_prompt,
     build_narrative_device_block,
     NARRATIVE_DEVICE_FIELDS,
@@ -1588,6 +1592,29 @@ def fix_episode_pipeline(ep, rating, platform):
                 text = ext
             else:
                 out["steps"].append(f"분량 보강 반려 (기존 문장 보존 {kept:.0%}, 마지막 장면 {'유지' if last_ok else '변경'})")
+
+        # ④ v2.14.2: 상한을 넘으면 덜어 낸다 — 지울 문장 목록만 받고, 코드가 원문 일치 문장만 삭제.
+        #    마지막 장면(끝 12%)은 지우지 않는다. 하한 아래로 떨어지면 반려.
+        if len(text) > plen["max"]:
+            dels = safe_json(call_claude(build_length_trim_prompt(text, ep, plen["max"], plen["min"]),
+                                         max_tokens=MAX_TOKENS_STRUCTURE))
+            trimmed, n_del = text, 0
+            tail_start = int(len(text) * 0.88)
+            for d in (dels if isinstance(dels, list) else []):
+                d = str(d or "").strip()
+                if len(d) < 8 or trimmed.count(d) != 1:
+                    continue
+                if text.find(d) >= tail_start:
+                    continue
+                trimmed = trimmed.replace(d, "", 1)
+                n_del += 1
+            trimmed = re.sub(r"[ \t]+\n", "\n", trimmed)
+            trimmed = re.sub(r"\n{3,}", "\n\n", trimmed)
+            if n_del and plen["min"] + 200 <= len(trimmed) < len(text):
+                out["steps"].append(f"분량 압축 {len(text):,}→{len(trimmed):,}자 ({n_del}문장)")
+                text = trimmed
+            elif n_del:
+                out["steps"].append(f"분량 압축 반려 ({len(trimmed):,}자 — 하한에 너무 가까움)")
 
         slot[ep] = text
         S.validation_results.pop(ep, None)
@@ -3330,7 +3357,7 @@ with tab3:
                 st.caption(
                     "미달 회차를 차례로 보정합니다: 구조 미달(M1·P1·C1·H1)은 재집필 1회 → 설정 위반(K1)은 "
                     "판정관이 짚은 문장만 교정 → 분량 부족(L1)은 초식 시전 · 싸움 장면 · 세계관 설명으로 보강 "
-                    "(기존 문장은 지우지 않음) → 다시 판정. 보정 전 원고는 회차별로 5개까지 남아 기준표 칸에서 "
+                    "(기존 문장은 지우지 않음) → 분량 초과는 되풀이 서술·감상만 덜어 냄 → 다시 판정. 보정 전 원고는 회차별로 5개까지 남아 기준표 칸에서 "
                     "되돌릴 수 있습니다. 회차당 3~6분."
                 )
                 _fx_pick = st.multiselect("보정할 회차", _done_eps, default=_under, key="fix_pick",
