@@ -1,9 +1,15 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.15.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.16.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.16.0 (2026-11-22) — Core Arc 구간 재설계 · 연재 드라마 규칙
+  · STEP 2 Core Arc 탭 🔁 구간 재설계: 시작~끝 회차, 리뷰·작가 메모, 유지할 비트를 넣으면 그 구간만
+    10화씩 다시 짠다. 구간 앞 5화와 뒤 2화를 함께 보여 이음매를 맞춤. 끊기면 이어서, 응답이 불완전하면 정지
+  · 재설계 전 Core Arc는 버전으로 보관(최근 5개)·되돌리기, 재설계한 회차의 기존 회차 플롯은 삭제(본문 유지)
+  · 몰아쓰기로 기존 본문을 다시 쓰면 이전 본문을 버전으로 보존
+  · Core Arc 설계 원칙에 연재 드라마 규칙 8개, 비트에 picks_up·win_or_loss·antagonist_move
 v2.15.0 (2026-11-22) — 연속성 대장 · 연재 점검 (EP1~15 외부 리뷰 반영)
   · [작가 요청] "이 의견 받아서 보완" → "엔진 보완"
   · 회차 플롯·본문·분량 보강에 연속성 블록 주입: 작가 설정 잠금 · 앞 화 마지막 장면 원문(800자) ·
@@ -426,6 +432,7 @@ from prompt import (
     build_extension_arc_prompt,
     build_extension_outline_prompt,   # v2.12.3
     build_core_arc_outline_prompt,    # v2.12.3
+    build_arc_revision_block,         # v2.16.0
     ARC_CHUNK_SIZE,                   # v2.12.3
     EXTENSION_CHUNK_SIZE,             # v2.12.3
     build_plant_payoff_prompt,
@@ -1029,6 +1036,8 @@ defaults = {
     "fix_log": [],                # v2.14.0
     "episode_versions": {},       # v2.14.0 — {ep: [{text, at, reason, rating, chars}]}
     "continuity_ledger": {},      # v2.15.0 — {ep: 연속성 대장 한 회분}
+    "core_arc_versions": [],      # v2.16.0 — 구간 재설계 전 Core Arc (최근 5개)
+    "rev_active": None,           # v2.16.0 — 진행 중인 구간 재설계 (세션 전용)
     "canon_locks": "",            # v2.15.0 — 작가 설정 잠금 (최우선)
     "ledger_active": None,        # v2.15.0 — 대장 일괄 생성 진행 (세션 전용)
     "extension_mode": "bridge",
@@ -1115,6 +1124,7 @@ PROJECT_KEYS = [
     "bundle_downloaded", "batch_log",   # v2.13.0
     "episode_versions", "fix_log",      # v2.14.0
     "continuity_ledger", "canon_locks", # v2.15.0
+    "core_arc_versions",                # v2.16.0
     # v2.12.0: 기준표 판정 · 기준점 원고
     "standard_results", "benchmarks", "benchmark_results",
 ]
@@ -1515,6 +1525,8 @@ def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=T
             res["error"] = f"본문이 너무 짧음 ({len(text.strip())}자, 2회)"
             return res
         slot = S.episodes_19 if rating == "19금" else S.episodes_15
+        if slot.get(ep):
+            _push_version(ep, rating, "다시 쓰기 전")   # v2.16.0: 덮어쓰기 전 원고 보존
         slot[ep] = text
         S.validation_results.pop(ep, None)
         S.standard_results.pop(ep, None)
@@ -2916,6 +2928,101 @@ with tab2:
                     use_container_width=True, key="core_resume", disabled=not _core_resume,
                 ):
                     _core_generate(from_scratch=False)
+
+            # ──── v2.16.0: 🔁 구간 재설계 ────
+            if st.session_state.core_arc:
+                with st.expander("🔁 구간 재설계 — 일부 회차만 리뷰·메모를 반영해 다시 짜기", expanded=False):
+                    st.caption(
+                        "지정한 구간만 다시 설계합니다. 구간 앞 회차의 클리프행어를 이어받고, 구간 다음 회차로 "
+                        "자연스럽게 이어지게 짭니다. 재설계한 회차의 기존 회차 플롯은 지워지고(본문은 남음), "
+                        "이전 Core Arc는 버전으로 남습니다. 본문을 새 설계로 다시 쓰려면 ⚡ 몰아쓰기에서 "
+                        "'이미 본문이 있는 회차는 건너뛴다'를 끄고 돌리세요 (기존 본문은 버전으로 남습니다)."
+                    )
+                    _rc1, _rc2 = st.columns(2)
+                    with _rc1:
+                        _rv_s = st.number_input("시작 회차", min_value=1, max_value=len(st.session_state.core_arc),
+                                                value=min(2, len(st.session_state.core_arc)), key="rev_start")
+                    with _rc2:
+                        _rv_e = st.number_input("끝 회차", min_value=int(_rv_s), max_value=len(st.session_state.core_arc),
+                                                value=min(15, len(st.session_state.core_arc)), key="rev_end")
+                    _rv_notes = st.text_area("반영할 리뷰·작가 메모 (붙여 넣기)", key="rev_notes", height=180,
+                                             placeholder="예) EP2·3 시연을 하나로 합친다. EP5 다연 재등장 삭제. EP7·8 백동수 장면 하나로. "
+                                                         "이름 쓰기는 한 번. EP12 관통의 후속을 EP13에. 선발대회 1차전을 당겨 온다…")
+                    _rv_locks = st.text_area("반드시 유지할 비트 (순서·내용 고정)", key="rev_locks", height=110,
+                                             placeholder="예) 결핍 사다리 순서: EP6 막기는 되는데 치기가 안 됨 → EP7 받아도 아무것도 안 됨 → … "
+                                                         "/ EP1 전체 / EP6 허수아비 시퀀스")
+                    _rvact = st.session_state.get("rev_active")
+                    if st.button(f"🔁 EP{int(_rv_s)}~EP{int(_rv_e)} 재설계", type="primary", use_container_width=True,
+                                 key="rev_go", disabled=bool(_rvact)):
+                        _vers = list(st.session_state.get("core_arc_versions") or [])
+                        _vers.append({"at": datetime.now().strftime("%m-%d %H:%M"),
+                                      "reason": f"EP{int(_rv_s)}~{int(_rv_e)} 재설계 전",
+                                      "arc": json.loads(json.dumps(st.session_state.core_arc, ensure_ascii=False))})
+                        st.session_state.core_arc_versions = _vers[-5:]
+                        st.session_state.rev_active = {"start": int(_rv_s), "end": int(_rv_e), "next": int(_rv_s),
+                                                       "notes": _rv_notes, "locks": _rv_locks}
+                        _rvact = st.session_state.rev_active
+                    if _rvact:
+                        _arc = st.session_state.core_arc
+                        _byep = {int(x.get("ep")): x for x in _arc if isinstance(x, dict) and str(x.get("ep", "")).isdigit()}
+                        _old_rng = "\n".join(
+                            f"EP{e} {_byep[e].get('title', '')} — {_byep[e].get('main_scene', '')} / 훅: {_byep[e].get('cliffhanger', '')}"
+                            for e in range(_rvact["start"], _rvact["end"] + 1) if e in _byep)
+                        _next_txt = "\n".join(
+                            f"EP{e} {_byep[e].get('title', '')} — {_byep[e].get('main_scene', '')}"
+                            for e in range(_rvact["end"] + 1, _rvact["end"] + 3) if e in _byep)
+                        _outline = "\n".join(f"EP{x.get('ep')} {x.get('title', '')} — {x.get('main_scene', '')[:80]}"
+                                              for x in _arc if isinstance(x, dict))
+                        _cc = st.session_state.concept_card
+                        _rv_prog = st.progress(0.0, text="구간 재설계 중")
+                        _total = _rvact["end"] - _rvact["start"] + 1
+                        while _rvact["next"] <= _rvact["end"]:
+                            _a = _rvact["next"]
+                            _b = min(_a + ARC_CHUNK_SIZE - 1, _rvact["end"])
+                            _rv_prog.progress((_a - _rvact["start"]) / _total, text=f"EP{_a}~EP{_b} 재설계 중")
+                            _prev = [_byep[e] for e in range(max(1, _a - 5), _a) if e in _byep]
+                            _blk = build_arc_revision_block(_rvact["start"], _rvact["end"], _rvact["notes"],
+                                                            _rvact["locks"], _next_txt, _old_rng)
+                            _p = safe_json(call_claude_opus(
+                                build_core_arc_prompt(
+                                    _cc, core_eps=len(_arc), producer_note=st.session_state.producer_note,
+                                    style_dna=st.session_state.style_dna,
+                                    style_strength=st.session_state.style_strength,
+                                    storyline_acts=st.session_state.storyline_acts,
+                                    martial_bible=st.session_state.martial_bible,
+                                    canon_excerpt=build_canon_excerpt(_canon_episodes()),
+                                    mode="chunk", outline_text=_outline,
+                                    prev_eps_text=json.dumps(_prev, ensure_ascii=False),
+                                    ep_start=_a, ep_end=_b, revision_block=_blk,
+                                ),
+                                max_tokens=MAX_TOKENS_ARC,
+                            ))
+                            _got = {int(x["ep"]): x for x in (_p if isinstance(_p, list) else [])
+                                    if isinstance(x, dict) and str(x.get("ep", "")).isdigit() and _a <= int(x["ep"]) <= _b}
+                            if len(_got) < (_b - _a + 1):
+                                st.error(f"EP{_a}~EP{_b} 재설계 응답이 불완전합니다 ({len(_got)}/{_b - _a + 1}화). "
+                                         "이전 Core Arc는 버전으로 남아 있습니다. 다시 누르면 이 구간부터 이어 갑니다.")
+                                st.session_state.rev_active = None
+                                st.stop()
+                            for e, x in _got.items():
+                                _byep[e] = x
+                                st.session_state.episode_plots.pop(e, None)   # 새 설계로 플롯을 다시 짜게
+                            st.session_state.core_arc = [_byep[e] for e in sorted(_byep)]
+                            _rvact["next"] = _b + 1
+                            st.session_state.rev_active = _rvact
+                            autosave_project(f"Core Arc EP{_a}~{_b} 재설계")
+                        st.session_state.rev_active = None
+                        _stamp("core_arc")
+                        st.success(f"✅ EP{_rvact['start']}~EP{_rvact['end']} 재설계 완료")
+                    _cav = st.session_state.get("core_arc_versions") or []
+                    if _cav:
+                        _cvi = st.selectbox("이전 Core Arc 버전", list(range(len(_cav)))[::-1],
+                                            format_func=lambda i: f"{_cav[i]['at']} · {_cav[i]['reason']}",
+                                            key="arc_ver_pick")
+                        if st.button("↩ 이 Core Arc 버전으로 되돌리기", key="arc_ver_back"):
+                            st.session_state.core_arc = _cav[_cvi]["arc"]
+                            st.success("✅ Core Arc를 되돌렸습니다 (회차 플롯은 필요하면 다시 생성하세요).")
+                            st.rerun()
 
             if st.session_state.core_arc:
                 st.markdown(f"**총 {len(st.session_state.core_arc)}화 설계 완료**")

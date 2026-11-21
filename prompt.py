@@ -1,10 +1,17 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.15.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.16.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.16.0 (2026-11-22) — Core Arc 연재 드라마 규칙 · 구간 재설계
+  · CORE_ARC_DESIGN에 연재 드라마 규칙 8개 (리뷰 결함을 설계 단계에서 차단): 훅 이어받기, 한 사건 한 회차,
+    큰 변곡 2화 안 후속, 5화마다 승리, 5화마다 악역의 실제 행동·엔딩 독점 금지, 모티프 강도 그래프,
+    집단 구성원 이름(없으면 '이름 미정 — 작가 결정'), 세계관 설명 한 번
+  · Core Arc 비트에 picks_up(앞 화 훅 이어받기) · win_or_loss · antagonist_move 필드 추가
+  · build_arc_revision_block() + build_core_arc_prompt(revision_block=) — 지정 구간만 리뷰·메모·잠금 비트를
+    반영해 다시 짠다. 구간 다음 회차에 착지하도록 뒤 회차를 함께 보여 준다
 v2.15.0 (2026-11-22) — 연속성 대장 (EP1~15 외부 리뷰 반영)
   · 리뷰 진단: 이음매 끊김(훅 미회수·장면 중복 10곳), 설정 흔들림(아미자·창미보·말투·호칭),
     반복(세계관 재설명 8~16회, 상투어 20회), 드라마(엔딩 독점·모티프 실종·무명·승리 없음)
@@ -345,7 +352,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.15.0"
+ENGINE_VERSION = "v2.16.0"
 ENGINE_BUILD_DATE = "2026-11-22"
 
 # ═══════════════════════════════════════════════════
@@ -4308,6 +4315,20 @@ CORE_ARC_DESIGN = """[Core Arc 완결형 설계 원칙]
 ## 독자 신뢰
 - Core Arc 마무리 = "이 작가는 인기 없어도 끝낸다"는 신뢰
 - 신뢰가 Extension의 성공을 보장
+
+## 연재 드라마 규칙 (v2.16.0 — EP1~15 외부 리뷰에서 나온 결함을 설계 단계에서 막는다)
+1. 이음매: 각 회차의 클리프행어는 다음 회차의 첫 장면이 반드시 이어받는다(picks_up).
+   훅을 걸고 다음 화에서 한 문단으로 요약하거나 잊으면 안 된다.
+2. 한 사건은 한 회차에서만: 자기소개·시연·대련·이름 쓰기 같은 사건을 두 회차에 나눠 다시 하지 않는다.
+   같은 장면을 장소·시간만 바꿔 다시 쓰지 않는다.
+3. 큰 변곡(주인공이 처음 뚫림·처음 짐·정체 일부 노출)은 다음 2화 안에 후속과 대가를 보여 준다.
+4. 승리와 좌절의 교대: 5화마다 주인공이 작은 판이라도 한 번 이긴다(win_or_loss). 좌절만 쌓지 않는다.
+5. 악역은 5화마다 한 번 실제로 손을 쓴다 — 주인공 쪽이 실질적 손해를 본다. 지켜보기·웃기만으로 엔딩을 채우지 않는다.
+   엔딩의 중심 인물을 한 사람에게 몰지 않는다(5화 중 3화 이상 금지).
+6. 핵심 모티프(기보·구슬·상징물)는 강도가 변하는 그래프로 쓴다. 변곡 회차에서 반응하고, 5화 이상 사라지지 않는다.
+7. 집단 구성원(정원·동기·팀)은 이름과 얼굴을 갖는다. 기획서에 이름이 없으면 지어내지 말고
+   "이름 미정 — 작가 결정"으로 표시한다.
+8. 세계관 설명은 처음 나올 때 한 번. 같은 설명을 회차마다 되풀이하지 않는다.
 """
 
 
@@ -4864,7 +4885,8 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
                           style_dna="", style_strength="중",
                           storyline_acts=None, martial_bible=None,
                           canon_excerpt="", mode=None, outline_text="",
-                          prev_eps_text="", ep_start=None, ep_end=None):
+                          prev_eps_text="", ep_start=None, ep_end=None,
+                          revision_block=""):
     """Core Arc 50화 생성.
 
     v2.4.0: 기획서 막 구조(storyline_acts)와 초식 바이블을 재료로 주입.
@@ -4917,7 +4939,7 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
 
 {CORE_ARC_DESIGN}
 
-{_core_arc_task_block(mode, core_eps, outline_text, prev_eps_text, ep_start, ep_end)}
+{_core_arc_task_block(mode, core_eps, outline_text, prev_eps_text, ep_start, ep_end, revision_block)}
 
 ## 출력 형식
 각 회차별로 아래 JSON 배열 형식:
@@ -4930,6 +4952,9 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
     "main_scene": "회차 핵심 씬 요약 (2~3문장)",
     "protagonist_beat": "주인공의 외적·내적 진행",
     "cliffhanger": "마지막 훅 (9유형 중 1개)",
+    "picks_up": "앞 화 클리프행어를 이 화 첫 장면에서 어떻게 이어받나 (EP1은 \"\")",
+    "win_or_loss": "승 / 패 / 없음 — 주인공 기준",
+    "antagonist_move": "악역이 이 화에서 실제로 한 행동 (없으면 \"\")",
     "plant_seeds": ["이 화에서 배치하는 떡밥"],
     "payoff_recall": ["이 화에서 회수하는 떡밥"]
   }},
@@ -4939,10 +4964,13 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
 {_core_arc_count_line(mode, core_eps, ep_start, ep_end)}"""
 
 
-def _core_arc_task_block(mode, core_eps, outline_text, prev_eps_text, ep_start, ep_end):
-    """v2.12.3 — Core Arc 분할 생성용 작업 지시."""
+def _core_arc_task_block(mode, core_eps, outline_text, prev_eps_text, ep_start, ep_end,
+                         revision_block=""):
+    """v2.12.3 — Core Arc 분할 생성용 작업 지시. v2.16.0: 구간 재설계 지시(revision_block)."""
     if mode == "chunk" and ep_start and ep_end:
         out = []
+        if revision_block:
+            out.append(revision_block)
         if outline_text:
             out.append(f"## Core Arc 전체 뼈대 (이 흐름을 따른다)\n{outline_text}")
         if prev_eps_text:
@@ -7303,3 +7331,26 @@ def ledger_done_text(ledger, ep_number):
     rows += [f"(EP{e}) 시연함: {x}" for e, x in _ledger_items(ledger, ep_number, "demos")]
     rows += [f"(EP{e}) 설명함: {x}" for e, x in _ledger_items(ledger, ep_number, "world_explained")]
     return "\n".join(rows[-80:])
+
+
+# ═══════════════════════════════════════════════════
+# v2.16.0 — Core Arc 구간 재설계
+# ───────────────────────────────────────────────────
+# 50화 전체를 다시 만들지 않고, 지정한 구간(예: EP2~15)만 리뷰·작가 메모·잠금 비트를 반영해 다시 짠다.
+# 구간 앞뒤의 회차는 그대로 두고, 앞 회차의 클리프행어를 이어받아 뒤 회차로 착지하게 한다.
+# ═══════════════════════════════════════════════════
+
+def build_arc_revision_block(range_start, range_end, notes="", locks="", next_eps_text="", old_range_text=""):
+    parts = [f"## 🔁 구간 재설계 — EP{range_start}~EP{range_end}를 다시 짠다 (v2.16.0)"]
+    if (locks or "").strip():
+        parts += ["### 반드시 유지할 것 — 순서·내용을 바꾸지 않는다", locks.strip()]
+    if (notes or "").strip():
+        parts += ["### 이번 재설계에 반영할 리뷰·작가 메모 (최우선)", notes.strip()[:9000]]
+    if (old_range_text or "").strip():
+        parts += ["### 기존 설계 (참고 — 위 메모가 지적한 문제는 고치고, 좋은 장면은 살린다)",
+                  old_range_text.strip()[:9000]]
+    if (next_eps_text or "").strip():
+        parts += [f"### 구간 다음 회차 (바꾸지 않는다 — EP{range_end}의 끝이 여기에 자연스럽게 이어져야 한다)",
+                  next_eps_text.strip()[:3000]]
+    parts.append("구간 안에서 같은 사건을 두 번 쓰지 않고, 비는 자리는 다음 큰 사건을 앞당겨 채운다.")
+    return "\n".join(parts)
