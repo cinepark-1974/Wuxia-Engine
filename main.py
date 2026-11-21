@@ -1,9 +1,14 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.14.2 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.14.3 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.14.3 (2026-11-22) — 원고 저장을 STEP 3 맨 아래로 · 보정 선택칸 버그
+  · [작가 요청] "원고 저장은 모든 단계가 끝났으니 맨 아래로 가야" — 📦 묶음 저장을
+    STEP 3 맨 아래 '📦 마무리 · 원고 저장'으로 옮김. 상단 안내 문구도 위치에 맞게 수정
+  · 🛠 보정할 회차: 보정 후 선택칸이 비거나 엉뚱한 회차가 남던 버그 — 미달 목록이 바뀌면
+    선택을 새 미달 목록으로 맞춤 (multiselect default 변동 제거)
 v2.14.2 (2026-11-22) — 분량 압축 (상한 초과)
   · fix_episode_pipeline ④: 상한을 넘으면 덜어 낼 문장 목록을 받아 원문과 정확히 일치하는 문장만 삭제.
     마지막 장면(끝 12%)은 삭제 대상에서 제외, 결과가 하한+200자 아래면 반려. 압축 전 원고는 버전으로 남음
@@ -3253,7 +3258,7 @@ with tab3:
                                if f"{rating}:{blk[0]}-{blk[1]}" not in _got]
             if _pending_blocks:
                 _pb = _pending_blocks[-1]
-                st.warning(f"📦 EP{_pb[0]}~EP{_pb[1]} 묶음이 완성됐습니다. 아래 📦 묶음 저장에서 원고 DOCX와 백업 JSON을 받아 두세요.")
+                st.warning(f"📦 EP{_pb[0]}~EP{_pb[1]} 묶음이 완성됐습니다. STEP 3 맨 아래 📦 마무리 · 원고 저장에서 원고 DOCX와 백업 JSON을 받아 두세요.")
 
             with st.expander("⚡ 몰아쓰기 — 여러 회차를 연속으로 집필", expanded=False):
                 st.caption(
@@ -3360,7 +3365,12 @@ with tab3:
                     "(기존 문장은 지우지 않음) → 분량 초과는 되풀이 서술·감상만 덜어 냄 → 다시 판정. 보정 전 원고는 회차별로 5개까지 남아 기준표 칸에서 "
                     "되돌릴 수 있습니다. 회차당 3~6분."
                 )
-                _fx_pick = st.multiselect("보정할 회차", _done_eps, default=_under, key="fix_pick",
+                # v2.14.3: 미달 목록이 바뀌면 선택을 새 미달 목록으로 맞춘다 (default 변동으로 선택이 비던 버그)
+                if st.session_state.get("_fix_pick_sig") != tuple(_under) or any(
+                        x not in _done_eps for x in (st.session_state.get("fix_pick") or [])):
+                    st.session_state["fix_pick"] = list(_under)
+                    st.session_state["_fix_pick_sig"] = tuple(_under)
+                _fx_pick = st.multiselect("보정할 회차", _done_eps, key="fix_pick",
                                           format_func=lambda e: f"EP{e} " + ",".join((_std_all.get(e) or {}).get("fail_ids") or []))
                 _fact = st.session_state.get("fix_active")
                 if _fact and st.button("⏹ 보정 중지", key="fix_stop", use_container_width=True):
@@ -3402,56 +3412,6 @@ with tab3:
                                      f"{' · '.join(_r.get('steps') or []) or (_r.get('error') or '—')} | "
                                      f"{', '.join(_r.get('fails_after') or []) or '—'} |")
                     st.markdown("\n".join(_rows))
-
-            with st.expander("📦 묶음 저장 — 5화·10화 단위 원고 DOCX + 백업 JSON",
-                             expanded=bool(_pending_blocks)):
-                _unit = st.radio("묶음 단위", [5, 10], horizontal=True,
-                                 index=0 if _bundle_unit_now == 5 else 1,
-                                 format_func=lambda u: f"{u}화", key="bundle_unit")
-                if _unit != _bundle_unit_now:
-                    st.session_state.bundle_unit_val = _unit
-                    st.rerun()
-                if not _complete_blocks:
-                    st.caption(f"아직 완성된 {_unit}화 묶음이 없습니다 ({rating} 본문 {len(_done_eps)}화).")
-                else:
-                    _blk_i = st.selectbox(
-                        "묶음", list(range(len(_complete_blocks))),
-                        index=len(_complete_blocks) - 1,
-                        format_func=lambda i: (f"EP{_complete_blocks[i][0]}~EP{_complete_blocks[i][1]}"
-                                               + ("  · 받음" if f"{rating}:{_complete_blocks[i][0]}-{_complete_blocks[i][1]}" in _got
-                                                  else "  · 아직 안 받음")),
-                        key="bundle_pick",
-                    )
-                    _bs, _be = _complete_blocks[_blk_i]
-                    _btitle = re.sub(r"[^\w\-]", "_", (st.session_state.concept_card or {}).get("title", "wuxia"))[:40]
-                    _bkey = f"{rating}:{_bs}-{_be}"
-                    _dc1, _dc2 = st.columns(2)
-                    with _dc1:
-                        try:
-                            _bdocx = build_season_docx(
-                                {e: _slot_now[e] for e in range(_bs, _be + 1) if e in _slot_now},
-                                st.session_state.concept_card,
-                                rating="19" if rating == "19금" else "15",
-                                platform=platform,
-                            )
-                            if st.download_button(
-                                f"📄 EP{_bs}~EP{_be} 원고 DOCX", data=_bdocx,
-                                file_name=f"{_btitle}_EP{_bs:03d}-{_be:03d}_{rating}_원고.docx",
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                use_container_width=True, key=f"bundle_docx_{_bkey}",
-                            ):
-                                st.session_state.bundle_downloaded = sorted(_got | {_bkey})
-                        except Exception as _ex:
-                            st.caption(f"DOCX 생성 실패: {_ex}")
-                    with _dc2:
-                        if st.download_button(
-                            f"💾 EP{_be} 시점 백업 JSON",
-                            data=json.dumps(build_project_snapshot(), ensure_ascii=False, indent=2).encode("utf-8"),
-                            file_name=f"{_btitle}_EP{_be:03d}_백업_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
-                            mime="application/json", use_container_width=True, key=f"bundle_json_{_bkey}",
-                        ):
-                            st.session_state.bundle_downloaded = sorted(_got | {_bkey})
-                    st.caption("백업 JSON은 지금까지의 프로젝트 전체입니다. 💾 프로젝트 불러오기로 올리면 이 시점부터 이어서 씁니다.")
 
             # ──── v2.10.0: 작가 원고 불러오기 ────
             _meta_ep = (st.session_state.episode_meta or {}).get(selected_ep) or {}
@@ -4284,6 +4244,59 @@ with tab3:
                                 max_tokens=MAX_TOKENS_SMALL,
                             )
                             st.markdown(feedback)
+
+            # ──── v2.14.3: 📦 원고 저장은 모든 단계가 끝난 뒤 — STEP 3 맨 아래 ────
+            st.markdown("---")
+            st.markdown('<div class="sub-tab-header">📦 마무리 · 원고 저장</div>', unsafe_allow_html=True)
+            with st.expander("📦 묶음 저장 — 5화·10화 단위 원고 DOCX + 백업 JSON",
+                             expanded=bool(_pending_blocks)):
+                _unit = st.radio("묶음 단위", [5, 10], horizontal=True,
+                                 index=0 if _bundle_unit_now == 5 else 1,
+                                 format_func=lambda u: f"{u}화", key="bundle_unit")
+                if _unit != _bundle_unit_now:
+                    st.session_state.bundle_unit_val = _unit
+                    st.rerun()
+                if not _complete_blocks:
+                    st.caption(f"아직 완성된 {_unit}화 묶음이 없습니다 ({rating} 본문 {len(_done_eps)}화).")
+                else:
+                    _blk_i = st.selectbox(
+                        "묶음", list(range(len(_complete_blocks))),
+                        index=len(_complete_blocks) - 1,
+                        format_func=lambda i: (f"EP{_complete_blocks[i][0]}~EP{_complete_blocks[i][1]}"
+                                               + ("  · 받음" if f"{rating}:{_complete_blocks[i][0]}-{_complete_blocks[i][1]}" in _got
+                                                  else "  · 아직 안 받음")),
+                        key="bundle_pick",
+                    )
+                    _bs, _be = _complete_blocks[_blk_i]
+                    _btitle = re.sub(r"[^\w\-]", "_", (st.session_state.concept_card or {}).get("title", "wuxia"))[:40]
+                    _bkey = f"{rating}:{_bs}-{_be}"
+                    _dc1, _dc2 = st.columns(2)
+                    with _dc1:
+                        try:
+                            _bdocx = build_season_docx(
+                                {e: _slot_now[e] for e in range(_bs, _be + 1) if e in _slot_now},
+                                st.session_state.concept_card,
+                                rating="19" if rating == "19금" else "15",
+                                platform=platform,
+                            )
+                            if st.download_button(
+                                f"📄 EP{_bs}~EP{_be} 원고 DOCX", data=_bdocx,
+                                file_name=f"{_btitle}_EP{_bs:03d}-{_be:03d}_{rating}_원고.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True, key=f"bundle_docx_{_bkey}",
+                            ):
+                                st.session_state.bundle_downloaded = sorted(_got | {_bkey})
+                        except Exception as _ex:
+                            st.caption(f"DOCX 생성 실패: {_ex}")
+                    with _dc2:
+                        if st.download_button(
+                            f"💾 EP{_be} 시점 백업 JSON",
+                            data=json.dumps(build_project_snapshot(), ensure_ascii=False, indent=2).encode("utf-8"),
+                            file_name=f"{_btitle}_EP{_be:03d}_백업_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                            mime="application/json", use_container_width=True, key=f"bundle_json_{_bkey}",
+                        ):
+                            st.session_state.bundle_downloaded = sorted(_got | {_bkey})
+                    st.caption("백업 JSON은 지금까지의 프로젝트 전체입니다. 💾 프로젝트 불러오기로 올리면 이 시점부터 이어서 씁니다.")
 
 
 # ══════════════════════════════════════════════
