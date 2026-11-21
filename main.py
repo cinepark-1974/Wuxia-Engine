@@ -1,9 +1,12 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.12.5 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.6 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.6 (2026-11-21) — 저장 시각을 한국 시각으로
+  · 실제 앱 확인: 자동 저장본 시각이 서버 기준(UTC)으로 9시간 이르게 표시됨
+  · main.py의 datetime.now()가 KST(UTC+9)를 돌려주도록 감쌈 — 자동 저장본·JSON 파일 이름·저장 시각 모두 적용
 v2.12.5 (2026-11-21) — 원고 자동 저장·백업
   · [작가 요청] "원고는 중간중간 저장-백업되도록 해줘"
     (11-21 실사용: Core Arc 30화에서 실행이 끊겨 세션 유실 위험 확인)
@@ -324,7 +327,16 @@ from bj_header import render_header  # 공통 헤더 (Writer Engine 기준)
 import anthropic
 import json
 import re
-from datetime import datetime
+from datetime import datetime as _dt_datetime, timezone as _dt_tz, timedelta as _dt_td
+
+
+class datetime(_dt_datetime):
+    """v2.12.6 — 서버(UTC) 대신 한국 시각(KST, UTC+9)으로 now()를 돌려준다.
+    저장 시각·파일 이름·자동 저장본 표시가 작가의 시계와 맞도록."""
+    @classmethod
+    def now(cls, tz=None):
+        return _dt_datetime.now(tz or _dt_tz(_dt_td(hours=9))).replace(tzinfo=None) if tz is None \
+            else _dt_datetime.now(tz)
 
 # ──── v2.12.2: 로컬 모듈 최신화 ────
 # Streamlit Cloud는 GitHub 변경을 받아도 이미 메모리에 올라간 prompt.py 등을
