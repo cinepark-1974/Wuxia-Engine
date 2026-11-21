@@ -1,9 +1,12 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.13.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.13.1 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.13.1 (2026-11-21) — 몰아쓰기 '끝 회차 지정'
+  · [작가 요청] "15화까지 원고 생성해" — 5/10/20화 단위로는 정확한 회차에서 멈출 수 없었다
+  · 회차 수에 '끝 회차 지정' 추가: 시작~끝 회차 범위만 쓴다 (건너뛰기 설정은 그대로 적용)
 v2.13.0 (2026-11-21) — ⚡ 몰아쓰기 · 📦 5화/10화 묶음 저장
   · [작가 요청] "한번에 몰아쓰기도 넣어둬" / "에피소드 5단위든 10단위든 저장이 되게"
   · write_episode_pipeline() — 회차 한 편: (앞 3화 요약이 비었으면 먼저 채움) → 플롯(있으면 재사용, 실패 시 1회 재시도) → 본문(Opus,
@@ -3067,11 +3070,18 @@ with tab3:
                         value=int(_missing[0] if _missing else ep_options[-1]), step=1, key="batch_start",
                     )
                 with _bc2:
-                    _b_count = st.selectbox("회차 수", ["5화", "10화", "20화", "끝까지"], key="batch_count")
+                    _b_count = st.selectbox("회차 수", ["5화", "10화", "20화", "끝까지", "끝 회차 지정"],
+                                            key="batch_count")
+                _b_end = None
+                if _b_count == "끝 회차 지정":
+                    _b_end = st.number_input(
+                        "끝 회차 (이 회차까지 쓰고 멈춘다)", min_value=int(_b_start), max_value=int(ep_options[-1]),
+                        value=int(min(_b_start + 4, ep_options[-1])), step=1, key="batch_end",
+                    )
                 _b_skip = st.checkbox("이미 본문이 있는 회차는 건너뛴다", value=True, key="batch_skip")
                 _b_judge = st.checkbox("회차마다 📏 기준표 판정", value=True, key="batch_judge")
-                _b_n = None if _b_count == "끝까지" else int(_b_count.replace("화", ""))
-                _b_targets = [e for e in ep_options if e >= _b_start]
+                _b_n = None if _b_count in ("끝까지", "끝 회차 지정") else int(_b_count.replace("화", ""))
+                _b_targets = [e for e in ep_options if e >= _b_start and (_b_end is None or e <= _b_end)]
                 if _b_skip:
                     _b_targets = [e for e in _b_targets if e not in _done_set]
                 if _b_n:
