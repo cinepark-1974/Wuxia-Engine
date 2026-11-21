@@ -1,9 +1,18 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.12.6 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.13.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.13.0 (2026-11-21) — ⚡ 몰아쓰기 · 📦 5화/10화 묶음 저장
+  · [작가 요청] "한번에 몰아쓰기도 넣어둬" / "에피소드 5단위든 10단위든 저장이 되게"
+  · write_episode_pipeline() — 회차 한 편: (앞 3화 요약이 비었으면 먼저 채움) → 플롯(있으면 재사용, 실패 시 1회 재시도) → 본문(Opus,
+    1,500자 미만이면 1회 재시도) → 회차 요약(다음 플롯 재료) → 📏 기준표 판정 → 자동 저장
+  · STEP 3 ⚡ 몰아쓰기: 시작 회차 + 5/10/20화/끝까지, 본문 있는 회차 건너뛰기, 기준표 판정 켜기/끄기.
+    한 화가 실패하면 거기서 멈추고 앞 회차는 남긴다. 재집필은 자동으로 하지 않는다(작가 클릭 원칙).
+    끝나면 회차별 글자 수·기준표·미달 항목 표
+  · STEP 3 📦 묶음 저장: 5화/10화 단위로 완성된 묶음마다 원고 DOCX(build_season_docx) +
+    그 시점 백업 JSON. 받은 묶음은 '받음'으로 표시, 안 받은 묶음이 있으면 상단 안내
 v2.12.6 (2026-11-21) — 저장 시각을 한국 시각으로
   · 실제 앱 확인: 자동 저장본 시각이 서버 기준(UTC)으로 9시간 이르게 표시됨
   · main.py의 datetime.now()가 KST(UTC+9)를 돌려주도록 감쌈 — 자동 저장본·JSON 파일 이름·저장 시각 모두 적용
@@ -960,6 +969,9 @@ defaults = {
     "extension_arc": [],
     "extension_outline": [],      # v2.12.3
     "core_outline": [],           # v2.12.3
+    "bundle_downloaded": [],      # v2.13.0 — 받은 묶음 ("15금:1-5")
+    "batch_log": [],              # v2.13.0 — 마지막 몰아쓰기 결과
+    "bundle_unit_val": 5,         # v2.13.0
     "extension_mode": "bridge",
     "extension_eps": 50,
     "plant_map_core": {},
@@ -1041,6 +1053,7 @@ PROJECT_KEYS = [
     "author_direction", "episode_meta", "artifact_sigs",
     # v2.11.0: 진단 결과와 채택표
     "brief_diagnosis", "adoption_block",
+    "bundle_downloaded", "batch_log",   # v2.13.0
     # v2.12.0: 기준표 판정 · 기준점 원고
     "standard_results", "benchmarks", "benchmark_results",
 ]
@@ -1305,6 +1318,112 @@ def list_autosaves():
             "reason": d.get("_autosave_reason") or "",
         })
     return sorted(out, key=lambda x: x["file"].split("__")[-1], reverse=True)
+
+
+# ──── v2.13.0: 회차 한 편 파이프라인 (몰아쓰기용) ────
+def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=True):
+    """플롯 → 본문 → 회차 요약 → (기준표 판정) → 자동 저장.
+
+    플롯이 이미 있으면 그대로 쓴다. 본문은 새로 쓴다(이전 본문의 검수·판정은 지운다).
+    Returns: {"ep", "status": ok|fail, "chars", "verdict", "fail_ids", "error"}
+    """
+    S = st.session_state
+    cc = S.concept_card
+    res = {"ep": ep, "status": "fail", "chars": 0, "verdict": "", "fail_ids": [], "error": ""}
+    try:
+        # ⓪ 앞 회차(최대 3화) 요약이 비어 있으면 먼저 채운다 — 플롯의 연속성 재료
+        _slot0 = S.episodes_19 if rating == "19금" else S.episodes_15
+        for p in range(max(1, ep - 3), ep):
+            if _slot0.get(p) and not S.episode_summaries.get(p):
+                S.episode_summaries[p] = call_claude(
+                    build_episode_summary_prompt(_slot0[p], p), max_tokens=MAX_TOKENS_SMALL,
+                )
+        # ① 플롯
+        if ep not in S.episode_plots:
+            ep_arc = next((e for e in target_arc if e.get("ep") == ep), {})
+            plant_map = S.plant_map_core if arc_source == "Core Arc" else S.plant_map_extension
+            prev = ""
+            for p in range(max(1, ep - 3), ep):
+                sm = S.episode_summaries.get(p, "")
+                if sm:
+                    prev += f"\n[EP{p}] {sm}"
+            parsed = None
+            for _try in range(2):
+                parsed = safe_json(call_claude(
+                    build_episode_plot_prompt(
+                        json.dumps(ep_arc, ensure_ascii=False),
+                        json.dumps(plant_map, ensure_ascii=False),
+                        ep,
+                        json.dumps(cc, ensure_ascii=False),
+                        prev_summaries=prev,
+                        producer_note=S.producer_note,
+                        character_bible=S.character_bible,
+                        episode_plots=S.episode_plots,
+                        martial_bible=S.martial_bible,
+                        storyline_acts=S.storyline_acts,
+                    ),
+                    max_tokens=MAX_TOKENS_STRUCTURE,
+                ))
+                if parsed:
+                    break
+            if not parsed:
+                res["error"] = "플롯 생성 실패 (2회)"
+                return res
+            S.episode_plots[ep] = parsed
+        # ② 본문
+        text = ""
+        for _try in range(2):
+            text = call_claude_opus(
+                build_episode_write_prompt(
+                    json.dumps(S.episode_plots[ep], ensure_ascii=False),
+                    json.dumps(S.character_bible, ensure_ascii=False),
+                    S.style_dna,
+                    ep,
+                    rating=rating,
+                    platform=platform,
+                    producer_note=S.producer_note,
+                    concept_card=cc,
+                    profession_blocks=auto_inject_profession_blocks(cc),
+                    episode_plots=S.episode_plots,
+                    martial_bible=S.martial_bible,
+                ),
+                max_tokens=MAX_TOKENS_EPISODE,
+            ) or ""
+            if len(text.strip()) >= 1500:
+                break
+        if len(text.strip()) < 1500:
+            res["error"] = f"본문이 너무 짧음 ({len(text.strip())}자, 2회)"
+            return res
+        slot = S.episodes_19 if rating == "19금" else S.episodes_15
+        slot[ep] = text
+        S.validation_results.pop(ep, None)
+        S.standard_results.pop(ep, None)
+        res["chars"] = len(text)
+        autosave_project(f"EP{ep} 본문 (몰아쓰기)")
+        # ③ 회차 요약 — 다음 회차 플롯의 재료
+        S.episode_summaries[ep] = call_claude(
+            build_episode_summary_prompt(text, ep), max_tokens=MAX_TOKENS_SMALL,
+        )
+        # ④ 기준표 판정
+        if judge:
+            canon = "\n\n".join(x for x in (_effective_direction(), build_world_bible_block(cc))
+                                 if x and x.strip())
+            r = evaluate_episode_standard(
+                text, ep,
+                safe_json(call_claude(
+                    build_standard_check_prompt(text, ep, cc, S.episode_plots.get(ep), canon),
+                    max_tokens=MAX_TOKENS_ANALYSIS, model=MODEL_SONNET,
+                )),
+                cc, platform, S.episode_plots.get(ep),
+            )
+            S.standard_results[ep] = r
+            res["verdict"], res["fail_ids"] = r.get("verdict", ""), r.get("fail_ids") or []
+        autosave_project(f"EP{ep} 완료 (몰아쓰기)")
+        res["status"] = "ok"
+        return res
+    except Exception as e:
+        res["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        return res
 
 
 with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
@@ -2915,6 +3034,127 @@ with tab3:
                 horizontal=True,
                 index=1 if st.session_state.concept_card.get("target_rating") == "19금" else 0,
             )
+
+            # ──── v2.13.0: ⚡ 몰아쓰기 · 📦 묶음 저장 ────
+            _slot_now = st.session_state.episodes_19 if rating == "19금" else st.session_state.episodes_15
+            _done_eps = sorted(int(k) for k, v in (_slot_now or {}).items() if v and str(k).isdigit())
+            _bundle_unit_now = int(st.session_state.get("bundle_unit_val", 5))
+            _done_set = set(_done_eps)
+            _complete_blocks = [
+                (b, b + _bundle_unit_now - 1) for b in range(1, (max(ep_options) if ep_options else 0) + 1, _bundle_unit_now)
+                if all(e in _done_set for e in range(b, b + _bundle_unit_now) if e in ep_options)
+                and any(e in ep_options for e in range(b, b + _bundle_unit_now))
+            ]
+            _got = set(st.session_state.get("bundle_downloaded") or [])
+            _pending_blocks = [blk for blk in _complete_blocks
+                               if f"{rating}:{blk[0]}-{blk[1]}" not in _got]
+            if _pending_blocks:
+                _pb = _pending_blocks[-1]
+                st.warning(f"📦 EP{_pb[0]}~EP{_pb[1]} 묶음이 완성됐습니다. 아래 📦 묶음 저장에서 원고 DOCX와 백업 JSON을 받아 두세요.")
+
+            with st.expander("⚡ 몰아쓰기 — 여러 회차를 연속으로 집필", expanded=False):
+                st.caption(
+                    "회차마다 ① 플롯 → ② 본문 → ⑥ 회차 요약 → 📏 기준표 판정을 차례로 실행하고, "
+                    "한 화가 끝날 때마다 자동 저장합니다. 회차당 6분 안팎이 걸립니다. "
+                    "중간에 멈추려면 오른쪽 위 Stop을 누르세요 — 끝난 회차까지는 남아 있습니다. "
+                    "재집필(REDO)은 자동으로 하지 않습니다. 끝나면 기준 미달 회차를 표로 보여 줍니다."
+                )
+                _missing = [e for e in ep_options if e not in _done_set]
+                _bc1, _bc2 = st.columns(2)
+                with _bc1:
+                    _b_start = st.number_input(
+                        "시작 회차", min_value=int(ep_options[0]), max_value=int(ep_options[-1]),
+                        value=int(_missing[0] if _missing else ep_options[-1]), step=1, key="batch_start",
+                    )
+                with _bc2:
+                    _b_count = st.selectbox("회차 수", ["5화", "10화", "20화", "끝까지"], key="batch_count")
+                _b_skip = st.checkbox("이미 본문이 있는 회차는 건너뛴다", value=True, key="batch_skip")
+                _b_judge = st.checkbox("회차마다 📏 기준표 판정", value=True, key="batch_judge")
+                _b_n = None if _b_count == "끝까지" else int(_b_count.replace("화", ""))
+                _b_targets = [e for e in ep_options if e >= _b_start]
+                if _b_skip:
+                    _b_targets = [e for e in _b_targets if e not in _done_set]
+                if _b_n:
+                    _b_targets = _b_targets[:_b_n]
+                if _b_targets:
+                    st.caption(f"대상: EP{_b_targets[0]}~EP{_b_targets[-1]} · {len(_b_targets)}화 · "
+                               f"{rating} · {platform} · 예상 {len(_b_targets) * 6}분 안팎")
+                else:
+                    st.caption("집필할 회차가 없습니다.")
+                if st.button("⚡ 몰아쓰기 시작", type="primary", use_container_width=True,
+                             key="batch_go", disabled=not _b_targets):
+                    _b_log = []
+                    _b_prog = st.progress(0.0, text="몰아쓰기 시작")
+                    for _i, _e in enumerate(_b_targets):
+                        _b_prog.progress(_i / len(_b_targets),
+                                         text=f"EP{_e} 집필 중 ({_i + 1}/{len(_b_targets)}) — 플롯 → 본문 → 요약 → 기준표")
+                        _r = write_episode_pipeline(_e, target_arc, arc_source, rating, platform, judge=_b_judge)
+                        _b_log.append(_r)
+                        st.session_state.batch_log = _b_log
+                        if _r["status"] != "ok":
+                            st.error(f"EP{_e}에서 멈췄습니다 — {_r['error']}. 그 앞 회차까지는 저장되어 있습니다.")
+                            break
+                    _b_prog.progress(1.0, text=f"몰아쓰기 끝 — {sum(1 for r in _b_log if r['status'] == 'ok')}화 완료")
+                    st.rerun()
+                _blog = st.session_state.get("batch_log") or []
+                if _blog:
+                    st.markdown("**마지막 몰아쓰기 결과**")
+                    _rows = ["| 회차 | 결과 | 글자 수 | 기준표 | 미달·누락 |", "|---|---|---|---|---|"]
+                    for _r in _blog:
+                        _rows.append(f"| EP{_r['ep']} | {'완료' if _r['status'] == 'ok' else '실패'} | "
+                                     f"{_r['chars']:,} | {_r['verdict'] or '—'} | "
+                                     f"{', '.join(_r['fail_ids']) or (_r['error'] if _r['status'] != 'ok' else '—')} |")
+                    st.markdown("\n".join(_rows))
+
+            with st.expander("📦 묶음 저장 — 5화·10화 단위 원고 DOCX + 백업 JSON",
+                             expanded=bool(_pending_blocks)):
+                _unit = st.radio("묶음 단위", [5, 10], horizontal=True,
+                                 index=0 if _bundle_unit_now == 5 else 1,
+                                 format_func=lambda u: f"{u}화", key="bundle_unit")
+                if _unit != _bundle_unit_now:
+                    st.session_state.bundle_unit_val = _unit
+                    st.rerun()
+                if not _complete_blocks:
+                    st.caption(f"아직 완성된 {_unit}화 묶음이 없습니다 ({rating} 본문 {len(_done_eps)}화).")
+                else:
+                    _blk_i = st.selectbox(
+                        "묶음", list(range(len(_complete_blocks))),
+                        index=len(_complete_blocks) - 1,
+                        format_func=lambda i: (f"EP{_complete_blocks[i][0]}~EP{_complete_blocks[i][1]}"
+                                               + ("  · 받음" if f"{rating}:{_complete_blocks[i][0]}-{_complete_blocks[i][1]}" in _got
+                                                  else "  · 아직 안 받음")),
+                        key="bundle_pick",
+                    )
+                    _bs, _be = _complete_blocks[_blk_i]
+                    _btitle = re.sub(r"[^\w\-]", "_", (st.session_state.concept_card or {}).get("title", "wuxia"))[:40]
+                    _bkey = f"{rating}:{_bs}-{_be}"
+                    _dc1, _dc2 = st.columns(2)
+                    with _dc1:
+                        try:
+                            _bdocx = build_season_docx(
+                                {e: _slot_now[e] for e in range(_bs, _be + 1) if e in _slot_now},
+                                st.session_state.concept_card,
+                                rating="19" if rating == "19금" else "15",
+                                platform=platform,
+                            )
+                            if st.download_button(
+                                f"📄 EP{_bs}~EP{_be} 원고 DOCX", data=_bdocx,
+                                file_name=f"{_btitle}_EP{_bs:03d}-{_be:03d}_{rating}_원고.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True, key=f"bundle_docx_{_bkey}",
+                            ):
+                                st.session_state.bundle_downloaded = sorted(_got | {_bkey})
+                        except Exception as _ex:
+                            st.caption(f"DOCX 생성 실패: {_ex}")
+                    with _dc2:
+                        if st.download_button(
+                            f"💾 EP{_be} 시점 백업 JSON",
+                            data=json.dumps(build_project_snapshot(), ensure_ascii=False, indent=2).encode("utf-8"),
+                            file_name=f"{_btitle}_EP{_be:03d}_백업_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                            mime="application/json", use_container_width=True, key=f"bundle_json_{_bkey}",
+                        ):
+                            st.session_state.bundle_downloaded = sorted(_got | {_bkey})
+                    st.caption("백업 JSON은 지금까지의 프로젝트 전체입니다. 💾 프로젝트 불러오기로 올리면 이 시점부터 이어서 씁니다.")
 
             # ──── v2.10.0: 작가 원고 불러오기 ────
             _meta_ep = (st.session_state.episode_meta or {}).get(selected_ep) or {}
