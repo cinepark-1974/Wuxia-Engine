@@ -3011,7 +3011,8 @@ def _std_locate(quote: str, text: str, _cache: dict = None) -> Optional[float]:
 
 def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
                               concept_card=None, platform: str = "문피아",
-                              episode_plot=None) -> dict:
+                              episode_plot=None, has_prev_hook: bool = False,
+                              has_ledger: bool = False) -> dict:
     """회차 기준표 판정.
 
     Returns:
@@ -3025,13 +3026,15 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
     text = text or ""
     plot = episode_plot if isinstance(episode_plot, dict) else {}
     scenes = [sc for sc in (plot.get("scenes") or []) if isinstance(sc, dict)]
-    items = standard_items_for(concept_card, has_plot=bool(scenes))
+    items = standard_items_for(concept_card, has_plot=bool(scenes),
+                               has_prev_hook=has_prev_hook, has_ledger=has_ledger)
     llm = llm_result if isinstance(llm_result, dict) else {}
     llm_items = llm.get("items") if isinstance(llm.get("items"), dict) else {}
     have_llm = bool(llm_items) or bool(llm.get("P1")) or "K1" in llm
     cache = {}
     rows = []
     violations = []   # v2.14.0: K1 위반 문장 (보정용) [{"quote","conflicts_with"}]
+    r1_violations = []   # v2.15.0: R1 재소개·재시연 문장
 
     def row(it, status, detail="", quote=""):
         rows.append({"id": it["id"], "name": it["name"], "need": it["need"], "axis": it["axis"],
@@ -3045,6 +3048,11 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
             ok = plen["min"] <= n <= plen["max"]
             row(it, "충족" if ok else "미달",
                 f"{n:,}자 (기준 {plen['min']:,}~{plen['max']:,}자)")
+            continue
+        if iid == "X2":   # v2.15.0 메타 노출
+            leaks = scan_meta_leaks(text)
+            row(it, "충족" if not leaks else "미달",
+                "없음" if not leaks else "발견: " + ", ".join(leaks[:6]))
             continue
         if iid == "H2":
             lim = standard_hanja_limit(concept_card, ep_number)
@@ -3079,13 +3087,16 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
             continue
         if chk == "violation":
             found = []
-            for v in (llm.get("K1") or []):
+            for v in (llm.get(iid) or []):
                 if not isinstance(v, dict):
                     continue
                 q = str(v.get("quote") or "")
                 if q.strip() and _std_locate(q, text, cache) is not None:
                     found.append((q, str(v.get("conflicts_with") or "")))
-            violations = [{"quote": q, "conflicts_with": c} for q, c in found]
+            if iid == "K1":
+                violations = [{"quote": q, "conflicts_with": c} for q, c in found]
+            else:
+                r1_violations.extend({"quote": q, "conflicts_with": c} for q, c in found)
             if not found:
                 row(it, "충족", "어긋나는 문장 없음")
             else:
@@ -3105,6 +3116,9 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
         if where is None:
             row(it, "미달", "인용한 문장이 본문에 없음 (근거 무효)", q)
             continue
+        if chk == "quote_open" and where > 0.25:   # v2.15.0 C2
+            row(it, "미달", f"근거 문장이 본문 {where:.0%} 지점 — 첫 25% 밖", q)
+            continue
         if chk == "quote_first" and where > _STD_POS_WINDOW:
             row(it, "미달", f"근거 문장이 본문 {where:.0%} 지점 — 첫 15% 밖", q)
             continue
@@ -3122,6 +3136,7 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
     else:
         verdict = "기준 충족"
     return {"verdict": verdict, "fail_ids": fail, "rows": rows, "violations": violations,
+            "r1_violations": r1_violations,
             "text_sig": standard_text_sig(text), "ep": int(ep_number or 0)}
 
 
@@ -3154,6 +3169,116 @@ def format_standard_report(result: dict, ep_number: int = 0, for_redo: bool = Fa
             det += f" — 「{r['quote'][:70].replace('|', '/')}」"
         out.append(f"| {r['id']} {r['name']} | {r['need']} | {mark.get(r['status'], '')} {r['status']} | {det} |")
     return "\n".join(out)
+
+
+# ═══════════════════════════════════════════════════
+# v2.15.0 — 연재 단위 검사 (리뷰 반영): 메타 노출 · 반복 표현 · 한자 불일치 · 연재 점검
+# ═══════════════════════════════════════════════════
+
+_META_LEAK_RE = re.compile(r"(?<![\d가-힣])(\d{1,3})화(?:의|에서|에|때|부터|까지|째)(?![가-힣]{0,1}[\d])")
+_HEADING_RE = re.compile(r"^\s*#{1,6}\s", re.M)
+_CLICHE_WATCH = ("아지랑이", "처음으로", "한 박자 늦게", "한 박자", "반 박자", "한 뼘", "숨을 멈췄다",
+                 "숨을 들이쉬고", "고개를 끄덕였다", "입꼬리가", "피식")
+
+
+def scan_meta_leaks(text: str) -> List[str]:
+    """본문 속 회차 번호 언급('2화의', '5화에서')과 마크다운 제목(#)."""
+    out = [m.group(0) for m in _META_LEAK_RE.finditer(text or "")]
+    if _HEADING_RE.search(text or ""):
+        out.append("# 제목 기호")
+    return out
+
+
+def cross_episode_repetition(episodes: dict, names=None, min_eps: int = 3,
+                             min_total: int = 6, top: int = 25) -> List[dict]:
+    """여러 회차에 걸쳐 되풀이되는 2~4어절 표현과 상투어 — [{"phrase","count","eps"}]."""
+    names = [n for n in (names or []) if n]
+    names += [n[-2:] for n in names if re.fullmatch(r"[가-힣]{3}", n)]   # 김지훈 → 지훈
+    per = {}
+    for k, t in (episodes or {}).items():
+        try:
+            e = int(k)
+        except (TypeError, ValueError):
+            continue
+        seen = {}
+        for sent in re.split(r"[.!?。…\n\"'“”‘’]+", t or ""):   # 문장 안에서만 묶는다
+            words = re.findall(r"[가-힣A-Za-z0-9]+", sent)
+            for n in (2, 3, 4):
+                for i in range(len(words) - n + 1):
+                    ph = " ".join(words[i:i + n])
+                    if len(ph.replace(" ", "")) < (4 if n >= 3 else 5):
+                        continue
+                    seen[ph] = seen.get(ph, 0) + 1
+        for w in _CLICHE_WATCH:
+            c = (t or "").count(w)
+            if c:
+                seen[w] = max(seen.get(w, 0), c)
+        for ph, c in seen.items():
+            d = per.setdefault(ph, {"count": 0, "eps": set()})
+            d["count"] += c
+            d["eps"].add(e)
+    cands = []
+    for ph, d in per.items():
+        if len(d["eps"]) < min_eps or d["count"] < min_total:
+            continue
+        if any(n in ph for n in names) and len(ph.split()) <= 3:
+            continue
+        cands.append({"phrase": ph, "count": d["count"], "eps": sorted(d["eps"])})
+    cands.sort(key=lambda x: (-x["count"], -len(x["phrase"])))
+    out = []
+    for c in cands:
+        if any(c["phrase"] in o["phrase"] and o["count"] >= c["count"] * 0.8 for o in out):
+            continue
+        out.append(c)
+        if len(out) >= top:
+            break
+    return out
+
+
+def hanja_variants(episodes: dict) -> dict:
+    """같은 한글 단어에 붙은 괄호 한자가 회차마다 다른 경우 — {단어: {한자: [회차]}}."""
+    m = {}
+    for k, t in (episodes or {}).items():
+        try:
+            e = int(k)
+        except (TypeError, ValueError):
+            continue
+        for w, h in re.findall(r"([가-힣]{2,8})\s?\(([\u4e00-\u9fff]{2,10})\)", t or ""):
+            m.setdefault(w, {}).setdefault(h, set()).add(e)
+    return {w: {h: sorted(es) for h, es in v.items()} for w, v in m.items() if len(v) > 1}
+
+
+def series_check(ledger: dict, window: int = 5, upto: int = 0) -> List[dict]:
+    """5화 단위 연재 점검 — [{"range","flags":[...]}]. 대장(ledger) 기반."""
+    eps = sorted(int(k) for k in (ledger or {}) if str(k).isdigit())
+    if upto:
+        eps = [e for e in eps if e <= upto]
+    out = []
+    motif_seen = {}
+    for e in eps:
+        for mo in ((ledger.get(e) or ledger.get(str(e)) or {}).get("motifs") or []):
+            motif_seen.setdefault(mo, []).append(e)
+    for s in range(1, (eps[-1] if eps else 0) + 1, window):
+        rng = [e for e in eps if s <= e < s + window]
+        if len(rng) < window:
+            continue
+        L = [ledger.get(e) or ledger.get(str(e)) or {} for e in rng]
+        flags = []
+        owners = [str(x.get("ending_owner") or "").strip() for x in L if x.get("ending_owner")]
+        if owners:
+            top = max(set(owners), key=owners.count)
+            if owners.count(top) >= 3:
+                flags.append(f"엔딩 쏠림 — {owners.count(top)}/{len(rng)}화 엔딩이 '{top}' 중심")
+        if not any(x.get("protagonist_win") for x in L):
+            flags.append("주인공의 승리가 한 번도 없음")
+        acts = [x.get("antagonist_action") for x in L if str(x.get("antagonist_action") or "").strip()]
+        if not acts:
+            flags.append("악역이 실제로 한 행동이 없음 (지켜보기·웃기만)")
+        for mo, es in motif_seen.items():
+            if len(es) >= 3 and es[0] < s and not any(s <= e < s + window for e in es):
+                flags.append(f"모티프 실종 — '{mo}' EP{es[-1]} 이후 안 나옴")
+        out.append({"range": f"EP{s}~EP{s + window - 1}", "flags": flags})
+    return out
 
 
 def _self_test():

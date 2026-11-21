@@ -47,6 +47,7 @@ v2.1.8 (2026-07-23) — 원고 서식 정비
 """
 
 import io
+import re
 from datetime import datetime
 
 from docx import Document
@@ -252,6 +253,11 @@ def _meta_line(doc, label, value):
 # ══════════════════════════════════════════════
 # 1. 회차별 DOCX (수정 편의)
 # ══════════════════════════════════════════════
+def _strip_md_heads(t):
+    """v2.15.0 — 줄 앞 마크다운 제목 기호(#) 제거 (목차에 '#'이 남던 문제)."""
+    return re.sub(r"^[ \t]*#{1,6}[ \t]*", "", t or "", flags=re.M)
+
+
 def build_episode_docx(episode_text, episode_number, concept=None,
                        plot=None, rating="19", platform="카카오페이지"):
     """
@@ -274,7 +280,7 @@ def build_episode_docx(episode_text, episode_number, concept=None,
     _setup_page(doc)
 
     # v2.8.1: 곧은 따옴표 → 둥근 따옴표 (출력 경로 전용, 원본 미변경)
-    episode_text = to_smart_quotes(episode_text or "")
+    episode_text = to_smart_quotes(_strip_md_heads(episode_text or ""))
 
     # 본문 첫 줄에서 제목 추출
     lines = episode_text.strip().split("\n")
@@ -352,7 +358,7 @@ def build_season_docx(episodes_dict, concept, rating="19", platform="카카오�
     """
     # v2.8.1: 곧은 따옴표 → 둥근 따옴표 (출력 경로 전용, 원본 미변경)
     episodes_dict = {
-        k: to_smart_quotes(v or "")
+        k: to_smart_quotes(_strip_md_heads(v or ""))
         for k, v in (episodes_dict or {}).items()
     }
 

@@ -1,10 +1,20 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.14.3 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.15.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.15.0 (2026-11-22) — 연속성 대장 (EP1~15 외부 리뷰 반영)
+  · 리뷰 진단: 이음매 끊김(훅 미회수·장면 중복 10곳), 설정 흔들림(아미자·창미보·말투·호칭),
+    반복(세계관 재설명 8~16회, 상투어 20회), 드라마(엔딩 독점·모티프 실종·무명·승리 없음)
+  · 원인: 회차를 쓸 때 Core Arc 한 줄과 앞 3화 요약만 보았다
+  · build_ledger_extract_prompt() — 회차 본문에서 장면·소개·시연·훅(열림/회수)·설정·말투·호칭·
+    설명한 세계관·엔딩 인물·승리·악역 행동·모티프를 뽑는다 (본문에 있는 것만)
+  · build_continuity_block() — 작가 설정 잠금 > 앞 화 마지막 장면 원문 > 미회수 훅 > 이미 끝난 장면 >
+    설정 대장 > 말투·호칭 > 이미 설명한 세계관 > 반복 금지 표현. 플롯·본문·분량 보강에 주입
+  · 기준표 신규: C2 앞 화 훅 이어받기(첫 25%) · R1 재소개·재시연 없음 · X2 메타 노출 없음(회차 번호·#)
+  · 분량 보강: '이미 설명한 세계관'은 다시 설명하지 않는다
 v2.14.3 (2026-11-22) — 원고 저장 위치 이동 · 보정 선택칸 버그 (main.py, 룰 변경 없음)
 v2.14.2 (2026-11-22) — 분량 압축 (상한 초과)
   · 11-21 보정 결과: 15화 중 13화 충족, 남은 2화(EP2 6,093자 · EP11 6,640자)는 모두 상한 초과
@@ -335,7 +345,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.14.3"
+ENGINE_VERSION = "v2.15.0"
 ENGINE_BUILD_DATE = "2026-11-22"
 
 # ═══════════════════════════════════════════════════
@@ -5167,7 +5177,7 @@ def build_episode_plot_prompt(arc_block, plant_map, ep_number,
                               concept_card, prev_summaries="",
                               producer_note="", character_bible=None,
                               episode_plots=None, martial_bible=None,
-                              storyline_acts=None):
+                              storyline_acts=None, continuity_block=""):
     """회차 플롯 생성.
 
     v2.3.1: 초식 사전 주입 — 이미 등장한 초식을 알고 설계하도록.
@@ -5195,6 +5205,8 @@ def build_episode_plot_prompt(arc_block, plant_map, ep_number,
 
 ## 직전 3화 요약
 {prev_summaries}
+
+{continuity_block}
 
 {get_pacing_block(ep_number)}
 
@@ -5259,7 +5271,8 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
                                ep_number, rating="19금",
                                platform="문피아", producer_note="",
                                concept_card=None, profession_blocks="",
-                               episode_plots=None, martial_bible=None):
+                               episode_plots=None, martial_bible=None,
+                               continuity_block=""):
     """회차 본문 집필.
 
     v2.3.1: 세계관 블록·초식 사전 블록 주입
@@ -5359,6 +5372,8 @@ def build_episode_write_prompt(episode_plot, characters, style_dna,
   — 초식 바이블의 무공 이름을 적극 사용할 것.
     이름 없는 격투로 무공 장면을 대체하지 말 것.
 {_youth_write_directive(concept_card)}
+
+{continuity_block}
 
 {build_standard_write_block(concept_card, ep_number, platform)}
 
@@ -6883,6 +6898,16 @@ WUXIA_STANDARD_EPISODE = [
     {"id": "S1", "axis": "서바이벌", "need": "필수", "check": "quote", "applies": "survival",
      "name": "경쟁 규칙 가시성",
      "criterion": "경쟁·시험·대회 장면이 있는 회차라면, 그 규칙이나 탈락 조건이 본문에 문장으로 있다"},
+    {"id": "C2", "axis": "연재", "need": "필수", "check": "quote_open", "applies": "prev_hook",
+     "name": "앞 화 훅 이어받기",
+     "criterion": "본문 첫 25% 안에 앞 화 마지막 장면(아래 제시)을 이어받거나 그 결과가 드러나는 문장이 있다 "
+                  "(앞 화 훅을 한 문단 요약으로 넘기거나 아예 언급하지 않으면 미달) — v2.15.0"},
+    {"id": "R1", "axis": "연재", "need": "필수", "check": "violation", "applies": "ledger",
+     "name": "재소개·재시연 없음",
+     "criterion": "이미 끝난 장면·자기소개·시연·설명(아래 연속성 대장)을 처음인 것처럼 다시 하는 문장이 없다 — v2.15.0"},
+    {"id": "X2", "axis": "연재", "need": "필수", "check": "static", "applies": "always",
+     "name": "메타 노출 없음",
+     "criterion": "본문 속 '2화의', '5화에서' 같은 회차 번호 언급·마크다운 기호(#)가 없다 — v2.15.0"},
     {"id": "X1", "axis": "서바이벌", "need": "권장", "check": "quote", "applies": "always",
      "name": "대가",
      "criterion": "이번 화에서 누군가 무언가를 잃거나 대가를 치른다 (부상·탈락·관계·자원·비밀)"},
@@ -6949,12 +6974,16 @@ def standard_hanja_limit(concept_card=None, ep_number=0):
     return 8
 
 
-def standard_items_for(concept_card=None, has_plot=True):
+def standard_items_for(concept_card=None, has_plot=True, has_prev_hook=False, has_ledger=False):
     """이 작품·회차에 적용되는 회차 기준표 항목."""
     ap = standard_applies(concept_card)
     out = []
     for it in WUXIA_STANDARD_EPISODE:
         a = it["applies"]
+        if a == "prev_hook" and not has_prev_hook:
+            continue
+        if a == "ledger" and not has_ledger:
+            continue
         if a == "survival" and not ap["survival"]:
             continue
         if a == "youth" and not ap["youth"]:
@@ -6994,15 +7023,21 @@ def build_planning_standard_block(concept_card=None):
 
 
 def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
-                                episode_plot=None, canon_text="", budget=24000):
+                                episode_plot=None, canon_text="", budget=24000,
+                                prev_hook="", done_text=""):
     """판정관 프롬프트 — 집필(Opus)과 분리된 Sonnet이 근거 문장만 뽑는다.
 
     판정(충족/미달)은 이 응답으로 하지 않는다. 코드가 인용을 본문과 대조해 판정한다.
     """
     plot = episode_plot if isinstance(episode_plot, dict) else {}
     scenes = [sc for sc in (plot.get("scenes") or []) if isinstance(sc, dict)]
-    items = [it for it in standard_items_for(concept_card, has_plot=bool(scenes))
+    items = [it for it in standard_items_for(concept_card, has_plot=bool(scenes),
+                                             has_prev_hook=bool(prev_hook), has_ledger=bool(done_text))
              if it["check"] != "static"]
+    prev_block = (f"\n## 앞 화 마지막 장면 (C2 — 이 장면을 이어받는 본문 문장)\n{prev_hook[:1200]}\n"
+                  if prev_hook else "")
+    done_block = (f"\n## 연속성 대장 — 이미 끝난 장면·소개·시연·설명 (R1 — 이것을 처음처럼 다시 하는 본문 문장)\n"
+                  f"{done_text[:5000]}\n" if done_text else "")
     item_lines = "\n".join(f"- {it['id']} {it['name']}: {it['criterion']}" for it in items)
     scene_lines = "\n".join(
         f"- 씬 {sc.get('scene_no', i + 1)}: {str(sc.get('beat') or '')} — {str(sc.get('action') or '')[:220]}"
@@ -7028,6 +7063,7 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
 ## 작가 확정 사항 · 채택표 · 세계관 (K1 — 이것과 어긋나는 본문 문장)
 {canon}
 
+{prev_block}{done_block}
 ## EP{ep_number} 본문
 {body}
 
@@ -7038,9 +7074,11 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
     "S1": {{"applicable": true, "quote": ""}}
   }},
   "P1": [{{"scene_no": 1, "quote": ""}}],
-  "K1": [{{"quote": "", "conflicts_with": "어긋나는 확정 사항 한 줄"}}]
+  "K1": [{{"quote": "", "conflicts_with": "어긋나는 확정 사항 한 줄"}}],
+  "R1": [{{"quote": "", "conflicts_with": "이미 나온 장면·소개 한 줄"}}]
 }}
-items에는 위 기준 중 P1·K1을 뺀 모든 번호를 넣는다. JSON 외 텍스트 금지. 코드 블록 금지."""
+items에는 위 기준 중 P1·K1·R1을 뺀 모든 번호를 넣는다. R1 대장이 없으면 R1은 빈 목록.
+JSON 외 텍스트 금지. 코드 블록 금지."""
 
 
 # ═══════════════════════════════════════════════════
@@ -7053,7 +7091,8 @@ items에는 위 기준 중 P1·K1을 뺀 모든 번호를 넣는다. JSON 외 �
 
 def build_length_extend_prompt(episode_text, ep_number, target_min, target_max,
                                concept_card=None, martial_bible=None,
-                               episode_plots=None, character_bible=None):
+                               episode_plots=None, character_bible=None,
+                               continuity_block=""):
     """분량 보강 — 기존 문장은 하나도 지우지 않고, 무협 장면을 덧붙여 분량을 채운다."""
     cur = len(episode_text or "")
     need = max(0, target_min + 300 - cur)
@@ -7075,7 +7114,8 @@ def build_length_extend_prompt(episode_text, ep_number, target_min, target_max,
 2. 싸움 장면: 이미 있는 대결·대치 장면 안에서 합(공격과 방어)을 두세 번 더 주고받게 한다.
    힘의 차이, 거리, 호흡, 발놀림, 무기와 지형이 보이게 쓴다.
 3. 세계관 설명: 장소·학교·세력·제도가 처음 나오는 자리에서 아래 세계관 바이블과 작가 확정 사항에
-   **이미 적힌 내용만** 서술로 풀어 준다.
+   **이미 적힌 내용만** 서술로 풀어 준다. 단, 아래 '이미 설명한 세계관'에 있는 항목은 다시 설명하지 않는다
+   (앞 화에서 설명한 것을 되풀이하면 반복이 된다 — v2.15.0).
 
 ## 지켜야 할 것
 - 기존 문장은 하나도 지우거나 바꾸지 않는다. 문장 순서도 그대로 둔다. 덧붙이기만 한다.
@@ -7087,6 +7127,8 @@ def build_length_extend_prompt(episode_text, ep_number, target_min, target_max,
 {world}
 
 {martial}
+
+{continuity_block}
 
 ## EP{ep_number} 본문 (이 글을 그대로 두고 보강한다)
 {episode_text}
@@ -7155,3 +7197,109 @@ def build_length_trim_prompt(episode_text, ep_number, target_max, target_min=500
 ## 출력 — JSON 배열만 (지울 문장들)
 ["", ""]
 JSON 외 텍스트 금지. 코드 블록 금지."""
+
+
+# ═══════════════════════════════════════════════════
+# v2.15.0 — 연속성 대장 (리뷰 반영: 이음매·설정 흔들림·반복·드라마)
+# ───────────────────────────────────────────────────
+# 회차를 쓸 때 엔진이 보던 것은 Core Arc 한 줄과 앞 3화 요약뿐이었다.
+#   → 앞 화 마지막 장면 원문 · 이미 끝난 장면/소개/시연 · 미회수 훅 · 설정 대장(정의·말투·호칭) ·
+#     이미 설명한 세계관 · 반복 금지 표현을 플롯·본문·보강 프롬프트에 넣는다.
+# 대장은 회차가 끝날 때마다 본문에서 추출한다 (본문에 없는 것은 적지 않는다).
+# ═══════════════════════════════════════════════════
+
+def build_ledger_extract_prompt(episode_text, ep_number):
+    """회차 본문 → 연속성 대장 한 회분 (JSON). 본문에 있는 것만."""
+    return f"""무협 웹소설 EP{ep_number} 본문을 읽고 연재 연속성 대장을 만드세요.
+**본문에 실제로 있는 것만** 적습니다. 추측·보충 금지. 각 항목은 짧게 한 줄.
+
+## 출력 — 아래 JSON 객체만
+{{
+  "scenes": ["이 화에서 끝난 장면·사건 (누가 무엇을 했나)"],
+  "intros": ["이 화에서 처음 등장하거나 자기소개한 인물 이름"],
+  "demos": ["이 화에서 보여 준 시연·대련·무공 공개 (누가 무엇을)"],
+  "hooks_opened": [{{"hook": "이 화가 걸어 둔 약속·위협·예고 (예: 내일 새벽 7시 본관 앞)", "next": "다음에 벌어져야 할 일"}}],
+  "hooks_closed": ["이 화에서 회수한 이전 회차의 약속·위협"],
+  "facts": [{{"subject": "무기·초식·제도·관계·'처음' 사건 이름", "fact": "본문이 정한 정의·사실"}}],
+  "speech": [{{"pair": "말하는 사람→듣는 사람", "level": "반말 또는 존댓말"}}],
+  "titles": [{{"speaker": "", "target": "", "title": "부르는 호칭"}}],
+  "world_explained": ["서술로 설명한 세계관 항목 (학교 제도·대회·세력 등)"],
+  "ending_owner": "마지막 장면의 중심 인물",
+  "protagonist_win": false,
+  "antagonist_action": "악역이 실제로 한 행동 (지켜보거나 웃기만 했으면 빈 문자열)",
+  "motifs": ["이 화에 나온 반복 모티프 (구슬·교복 등)"]
+}}
+JSON 외 텍스트 금지. 코드 블록 금지.
+
+## EP{ep_number} 본문
+{(episode_text or "")[:24000]}"""
+
+
+def _ledger_items(ledger, upto_ep, key):
+    out = []
+    for e in sorted(int(k) for k in (ledger or {}) if str(k).isdigit() and int(k) < upto_ep):
+        for x in ((ledger.get(e) or ledger.get(str(e)) or {}).get(key) or []):
+            out.append((e, x))
+    return out
+
+
+def build_continuity_block(ledger, ep_number, prev_ending="", locks="", overused=None):
+    """누적 연속성 블록 — 플롯·본문·보강 프롬프트에 넣는다."""
+    parts = ["## 🧾 연속성 대장 — 앞 회차와 이어지게 쓴다 (v2.15.0)"]
+    if (locks or "").strip():
+        parts += ["### 작가 설정 잠금 — 최우선, 바꾸지 말 것", locks.strip()]
+    if (prev_ending or "").strip():
+        parts += [f"### 앞 화(EP{ep_number - 1}) 마지막 장면 원문 — 첫 장면은 이 직후를 이어받는다",
+                  prev_ending.strip()]
+    closed = " ".join(str(x) for _, x in _ledger_items(ledger, ep_number, "hooks_closed"))
+    hooks = []
+    for e, h in _ledger_items(ledger, ep_number, "hooks_opened"):
+        txt = h.get("hook", "") if isinstance(h, dict) else str(h)
+        nxt = h.get("next", "") if isinstance(h, dict) else ""
+        if txt and txt[:12] not in closed:
+            hooks.append(f"- (EP{e}) {txt}" + (f" → {nxt}" if nxt else ""))
+    if hooks:
+        parts += ["### 아직 회수하지 않은 훅 — 버리지 말고 회수하거나 이어 간다", *hooks[-12:]]
+    done = [f"- (EP{e}) {x}" for e, x in _ledger_items(ledger, ep_number, "scenes")][-25:]
+    done += [f"- (EP{e}) 소개됨: {x}" for e, x in _ledger_items(ledger, ep_number, "intros")]
+    done += [f"- (EP{e}) 시연함: {x}" for e, x in _ledger_items(ledger, ep_number, "demos")][-20:]
+    if done:
+        parts += ["### 이미 끝난 장면·소개·시연 — 처음인 것처럼 다시 쓰지 않는다 (한 구절 상기는 가능)", *done]
+    facts = {}
+    for e, f in _ledger_items(ledger, ep_number, "facts"):
+        if isinstance(f, dict) and f.get("subject"):
+            facts.setdefault(f["subject"], (e, f.get("fact", "")))
+    if facts:
+        parts += ["### 설정 대장 — 본문이 이미 정한 정의 (처음 정한 대로 유지한다)",
+                  *[f"- {k}: {v} (EP{e})" for k, (e, v) in list(facts.items())[:40]]]
+    speech = {}
+    for e, sp in _ledger_items(ledger, ep_number, "speech"):
+        if isinstance(sp, dict) and sp.get("pair"):
+            speech[sp["pair"]] = (e, sp.get("level", ""))
+    titles = {}
+    for e, t in _ledger_items(ledger, ep_number, "titles"):
+        if isinstance(t, dict) and t.get("speaker") and t.get("target"):
+            titles.setdefault(f"{t['speaker']}→{t['target']}", (e, t.get("title", "")))
+    if speech or titles:
+        parts += ["### 말투·호칭 — 바꾸려면 장면에서 전환 계기를 보여 준다",
+                  *[f"- {k}: {v} (EP{e}부터)" for k, (e, v) in list(speech.items())[:30]],
+                  *[f"- {k} 호칭: {v} (EP{e})" for k, (e, v) in list(titles.items())[:20]]]
+    wex = []
+    for _, w in _ledger_items(ledger, ep_number, "world_explained"):
+        if w not in wex:
+            wex.append(w)
+    if wex:
+        parts += ["### 이미 설명한 세계관 — 다시 설명하지 않는다", "- " + " / ".join(wex[:40])]
+    if overused:
+        parts += ["### 반복 금지 표현 — 앞 회차에서 너무 자주 썼다 (이 화에서는 쓰지 않거나 한 번만)",
+                  "- " + " / ".join(overused[:20])]
+    return "\n".join(parts) if len(parts) > 1 else ""
+
+
+def ledger_done_text(ledger, ep_number):
+    """판정관 R1용 — 이미 끝난 장면·소개·시연·설명 목록."""
+    rows = [f"(EP{e}) {x}" for e, x in _ledger_items(ledger, ep_number, "scenes")]
+    rows += [f"(EP{e}) 소개됨: {x}" for e, x in _ledger_items(ledger, ep_number, "intros")]
+    rows += [f"(EP{e}) 시연함: {x}" for e, x in _ledger_items(ledger, ep_number, "demos")]
+    rows += [f"(EP{e}) 설명함: {x}" for e, x in _ledger_items(ledger, ep_number, "world_explained")]
+    return "\n".join(rows[-80:])

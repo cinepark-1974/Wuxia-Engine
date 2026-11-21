@@ -1,9 +1,19 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.14.3 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.15.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.15.0 (2026-11-22) — 연속성 대장 · 연재 점검 (EP1~15 외부 리뷰 반영)
+  · [작가 요청] "이 의견 받아서 보완" → "엔진 보완"
+  · 회차 플롯·본문·분량 보강에 연속성 블록 주입: 작가 설정 잠금 · 앞 화 마지막 장면 원문(800자) ·
+    미회수 훅 · 이미 끝난 장면/소개/시연 · 설정 대장 · 말투·호칭 · 이미 설명한 세계관 · 반복 금지 표현
+  · 대장은 몰아쓰기(요약 직후)와 ⑥ 회차 요약 때 본문에서 자동 추출. 기존 회차는 🧾 칸에서 일괄 생성
+  · 기준표: C2 앞 화 훅 이어받기 · R1 재소개·재시연 없음 · X2 메타 노출 없음 — 판정관에 앞 화 엔딩과 대장 전달
+  · 🛠 보정: R1·X2 위반 문장도 K1처럼 그 문장만 교정, 본문 줄 앞 '#' 자동 제거
+  · STEP 3 🧾 연속성 대장 · 연재 점검 칸: 설정 잠금 입력, 대장 일괄 생성(끊겨도 이어감),
+    5화 단위 점검(엔딩 쏠림·승리 없음·악역 무행동·모티프 실종), 반복 표현, 한자 불일치, 메타 노출,
+    다음 회차 연속성 블록 미리보기
 v2.14.3 (2026-11-22) — 원고 저장을 STEP 3 맨 아래로 · 보정 선택칸 버그
   · [작가 요청] "원고 저장은 모든 단계가 끝났으니 맨 아래로 가야" — 📦 묶음 저장을
     STEP 3 맨 아래 '📦 마무리 · 원고 저장'으로 옮김. 상단 안내 문구도 위치에 맞게 수정
@@ -475,6 +485,10 @@ from prompt import (
     build_length_extend_prompt,
     build_k1_fix_prompt,
     build_length_trim_prompt,   # v2.14.2
+    # v2.15.0 — 연속성 대장
+    build_ledger_extract_prompt,
+    build_continuity_block,
+    ledger_done_text,
     build_narrative_devices_prompt,
     build_narrative_device_block,
     NARRATIVE_DEVICE_FIELDS,
@@ -527,6 +541,10 @@ from engine_validator import (
     evaluate_episode_standard,      # v2.12.0 신규
     format_standard_report,         # v2.12.0 신규
     standard_text_sig,              # v2.12.0 신규
+    scan_meta_leaks,                # v2.15.0
+    cross_episode_repetition,       # v2.15.0
+    hanja_variants,                 # v2.15.0
+    series_check,                   # v2.15.0
 )
 
 
@@ -1010,6 +1028,9 @@ defaults = {
     "fix_active": None,           # v2.14.0 — 진행 중인 보정 계획 (세션 전용)
     "fix_log": [],                # v2.14.0
     "episode_versions": {},       # v2.14.0 — {ep: [{text, at, reason, rating, chars}]}
+    "continuity_ledger": {},      # v2.15.0 — {ep: 연속성 대장 한 회분}
+    "canon_locks": "",            # v2.15.0 — 작가 설정 잠금 (최우선)
+    "ledger_active": None,        # v2.15.0 — 대장 일괄 생성 진행 (세션 전용)
     "extension_mode": "bridge",
     "extension_eps": 50,
     "plant_map_core": {},
@@ -1093,6 +1114,7 @@ PROJECT_KEYS = [
     "brief_diagnosis", "adoption_block",
     "bundle_downloaded", "batch_log",   # v2.13.0
     "episode_versions", "fix_log",      # v2.14.0
+    "continuity_ledger", "canon_locks", # v2.15.0
     # v2.12.0: 기준표 판정 · 기준점 원고
     "standard_results", "benchmarks", "benchmark_results",
 ]
@@ -1266,6 +1288,7 @@ EPISODE_KEYED_KEYS = [
     "episode_meta",   # v2.10.0
     "standard_results", "benchmarks", "benchmark_results",   # v2.12.0
     "episode_versions",   # v2.14.0
+    "continuity_ledger",  # v2.15.0
 ]
 
 
@@ -1360,6 +1383,60 @@ def list_autosaves():
     return sorted(out, key=lambda x: x["file"].split("__")[-1], reverse=True)
 
 
+# ──── v2.15.0: 연속성 대장 헬퍼 ────
+_HEAD_HASH_RE = re.compile(r"^[ \t]*#{1,6}[ \t]*", re.M)
+
+
+def _clean_episode_text(t):
+    """본문 정리 — 줄 앞 마크다운 제목 기호(#) 제거 (목차·DOCX에 '#'이 남던 문제)."""
+    return _HEAD_HASH_RE.sub("", t or "")
+
+
+def _char_names():
+    S = st.session_state
+    blob = json.dumps(S.get("character_bible") or {}, ensure_ascii=False) + json.dumps(
+        S.get("concept_card") or {}, ensure_ascii=False)
+    return list({n for n in re.findall(r'"name"\s*:\s*"([^"]{2,8})"', blob)})
+
+
+def _ledger():
+    return st.session_state.get("continuity_ledger") or {}
+
+
+def _slot_of(rating):
+    return st.session_state.episodes_19 if rating == "19금" else st.session_state.episodes_15
+
+
+def _overused(upto_ep, rating):
+    slot = _slot_of(rating)
+    eps = {k: v for k, v in slot.items() if str(k).isdigit() and int(k) < upto_ep and v}
+    if len(eps) < 3:
+        return []
+    return [r["phrase"] for r in cross_episode_repetition(eps, names=_char_names(), top=20)]
+
+
+def _prev_ending(ep, rating, n=800):
+    t = _slot_of(rating).get(ep - 1) or ""
+    return t[-n:] if t else ""
+
+
+def _continuity_for(ep, rating):
+    return build_continuity_block(
+        _ledger(), ep, prev_ending=_prev_ending(ep, rating),
+        locks=st.session_state.get("canon_locks") or "", overused=_overused(ep, rating),
+    )
+
+
+def _extract_ledger(ep, text):
+    p = safe_json(call_claude(build_ledger_extract_prompt(text, ep), max_tokens=MAX_TOKENS_STRUCTURE))
+    if isinstance(p, dict):
+        led = dict(_ledger())
+        led[ep] = p
+        st.session_state.continuity_ledger = led
+        return p
+    return None
+
+
 # ──── v2.13.0: 회차 한 편 파이프라인 (몰아쓰기용) ────
 def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=True, fix=False):
     """플롯 → 본문 → 회차 요약 → (기준표 판정) → 자동 저장.
@@ -1401,6 +1478,7 @@ def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=T
                         episode_plots=S.episode_plots,
                         martial_bible=S.martial_bible,
                         storyline_acts=S.storyline_acts,
+                        continuity_block=_continuity_for(ep, rating),   # v2.15.0
                     ),
                     max_tokens=MAX_TOKENS_STRUCTURE,
                 ))
@@ -1426,9 +1504,11 @@ def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=T
                     profession_blocks=auto_inject_profession_blocks(cc),
                     episode_plots=S.episode_plots,
                     martial_bible=S.martial_bible,
+                    continuity_block=_continuity_for(ep, rating),   # v2.15.0
                 ),
                 max_tokens=MAX_TOKENS_EPISODE,
             ) or ""
+            text = _clean_episode_text(text)
             if len(text.strip()) >= 1500:
                 break
         if len(text.strip()) < 1500:
@@ -1444,19 +1524,11 @@ def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=T
         S.episode_summaries[ep] = call_claude(
             build_episode_summary_prompt(text, ep), max_tokens=MAX_TOKENS_SMALL,
         )
+        # ③-2 v2.15.0: 연속성 대장 — 다음 회차의 재료
+        _extract_ledger(ep, text)
         # ④ 기준표 판정
         if judge:
-            canon = "\n\n".join(x for x in (_effective_direction(), build_world_bible_block(cc))
-                                 if x and x.strip())
-            r = evaluate_episode_standard(
-                text, ep,
-                safe_json(call_claude(
-                    build_standard_check_prompt(text, ep, cc, S.episode_plots.get(ep), canon),
-                    max_tokens=MAX_TOKENS_ANALYSIS, model=MODEL_SONNET,
-                )),
-                cc, platform, S.episode_plots.get(ep),
-            )
-            S.standard_results[ep] = r
+            r = _judge_episode(ep, text, platform, rating)
             res["verdict"], res["fail_ids"] = r.get("verdict", ""), r.get("fail_ids") or []
         autosave_project(f"EP{ep} 완료 (몰아쓰기)")
         # ⑤ v2.14.0: 기준 미달이면 보정 1회 (작가가 몰아쓰기에서 체크한 경우만)
@@ -1488,17 +1560,22 @@ def _push_version(ep, rating, reason):
     S.episode_versions = vers
 
 
-def _judge_episode(ep, text, platform):
+def _judge_episode(ep, text, platform, rating="15금"):
     S = st.session_state
     cc = S.concept_card
-    canon = "\n\n".join(x for x in (_effective_direction(), build_world_bible_block(cc)) if x and x.strip())
+    canon = "\n\n".join(x for x in (_effective_direction(), build_world_bible_block(cc),
+                                     (S.get("canon_locks") or "")) if x and x.strip())
+    prev_hook = _prev_ending(ep, rating, 1000)          # v2.15.0 C2
+    done = ledger_done_text(_ledger(), ep)              # v2.15.0 R1
     r = evaluate_episode_standard(
         text, ep,
         safe_json(call_claude(
-            build_standard_check_prompt(text, ep, cc, S.episode_plots.get(ep), canon),
+            build_standard_check_prompt(text, ep, cc, S.episode_plots.get(ep), canon,
+                                        prev_hook=prev_hook, done_text=done),
             max_tokens=MAX_TOKENS_ANALYSIS, model=MODEL_SONNET,
         )),
         cc, platform, S.episode_plots.get(ep),
+        has_prev_hook=bool(prev_hook), has_ledger=bool(done),
     )
     S.standard_results[ep] = r
     return r
@@ -1534,9 +1611,10 @@ def fix_episode_pipeline(ep, rating, platform):
             out["error"] = "본문 없음"
             return out
         out["chars_before"] = len(text)
+        text = _clean_episode_text(text)   # v2.15.0: '#' 제거
         res = S.standard_results.get(ep)
         if not res or res.get("text_sig") != standard_text_sig(text):
-            res = _judge_episode(ep, text, platform)
+            res = _judge_episode(ep, text, platform, rating)
         out["before"] = res.get("verdict", "")
         fails = list(res.get("fail_ids") or [])
         if not fails:
@@ -1546,7 +1624,7 @@ def fix_episode_pipeline(ep, rating, platform):
         plen = PLATFORM_LENGTH.get(platform, {"min": 5000, "max": 6000})
 
         # ① 구조 미달(M1·P1·C1·H1·A1·S1)은 재집필 1회
-        struct = [f for f in fails if f not in ("L1", "K1")]
+        struct = [f for f in fails if f not in ("L1", "K1", "R1", "X2")]
         if struct:
             new = call_claude_opus(
                 build_episode_redo_prompt(
@@ -1559,12 +1637,22 @@ def fix_episode_pipeline(ep, rating, platform):
             if len(new.strip()) >= max(1500, int(len(text) * 0.8)):
                 text = new
                 out["steps"].append(f"재집필({', '.join(struct)})")
-                res = _judge_episode(ep, text, platform)
+                res = _judge_episode(ep, text, platform, rating)
             else:
                 out["steps"].append(f"재집필 반려 ({len(new.strip()):,}자 — 원래의 80% 미만)")
 
         # ② 설정 위반 문장만 교정 — 코드가 정확히 치환
         vio = _k1_violations(res) if "K1" in (res.get("fail_ids") or []) else []
+        # v2.15.0: 재소개·재시연(R1)과 회차 번호 노출(X2)도 같은 방식으로 그 문장만 고친다
+        vio += [v for v in (res.get("r1_violations") or []) if isinstance(v, dict) and v.get("quote")]
+        for lk in scan_meta_leaks(text):
+            if lk.startswith("#"):
+                continue
+            for sent in re.split(r"(?<=[.!?。])\s+", text):
+                if lk in sent:
+                    vio.append({"quote": sent.strip()[:120],
+                                "conflicts_with": f"본문에 회차 번호('{lk}')를 쓰지 않는다 — 장면으로 가리킨다"})
+                    break
         if vio:
             canon = "\n\n".join(x for x in (_effective_direction(), build_world_bible_block(cc)) if x and x.strip())
             pairs = safe_json(call_claude(build_k1_fix_prompt(text, vio, canon, ep),
@@ -1586,7 +1674,8 @@ def fix_episode_pipeline(ep, rating, platform):
                 build_length_extend_prompt(text, ep, plen["min"], plen["max"], cc,
                                            martial_bible=S.martial_bible,
                                            episode_plots=S.episode_plots,
-                                           character_bible=S.character_bible),
+                                           character_bible=S.character_bible,
+                                           continuity_block=_continuity_for(ep, rating)),
                 max_tokens=MAX_TOKENS_EPISODE,
             ) or ""
             paras = [p.strip() for p in text.split("\n") if len(p.strip()) >= 15]
@@ -1623,7 +1712,7 @@ def fix_episode_pipeline(ep, rating, platform):
 
         slot[ep] = text
         S.validation_results.pop(ep, None)
-        res = _judge_episode(ep, text, platform)
+        res = _judge_episode(ep, text, platform, rating)
         out.update(status="ok", after=res.get("verdict", ""), chars_after=len(text),
                    fails_after=res.get("fail_ids") or [])
         autosave_project(f"EP{ep} 보정")
@@ -3260,6 +3349,76 @@ with tab3:
                 _pb = _pending_blocks[-1]
                 st.warning(f"📦 EP{_pb[0]}~EP{_pb[1]} 묶음이 완성됐습니다. STEP 3 맨 아래 📦 마무리 · 원고 저장에서 원고 DOCX와 백업 JSON을 받아 두세요.")
 
+            # ──── v2.15.0: 🧾 연속성 대장 · 연재 점검 ────
+            _led_now = _ledger()
+            _led_have = [e for e in _done_eps if (_led_now.get(e) or _led_now.get(str(e)))]
+            with st.expander(f"🧾 연속성 대장 · 연재 점검 — 대장 {len(_led_have)}/{len(_done_eps)}화", expanded=False):
+                st.caption(
+                    "회차마다 본문에서 장면·소개·시연·훅·설정 정의·말투·호칭·설명한 세계관을 뽑아 둡니다. "
+                    "다음 회차를 쓸 때 앞 화 마지막 장면 원문과 함께 플롯·본문·분량 보강에 들어가, "
+                    "같은 장면을 다시 쓰거나 훅을 버리거나 설정이 흔들리는 것을 막습니다. "
+                    "몰아쓰기·⑥ 회차 요약 때 자동으로 갱신됩니다."
+                )
+                st.text_area(
+                    "작가 설정 잠금 — 최우선 (대장보다 앞섭니다)",
+                    key="canon_locks", height=150,
+                    placeholder=(
+                        "예)\n- 아미자: 마디가 이어진 연결형. 한 마디만 풀어 박는 것은 고급 기술.\n"
+                        "- 창미보: 창끝을 두고 꼬리가 먼저 도는 회피.\n"
+                        "- 지훈↔준후: 처음부터 반말 단짝. 지훈↔시호: 존댓말, 시호가 먼저 말끝을 놓는 장면부터 반말.\n"
+                        "- 지훈 시점에서 신유선 호칭은 '이사장님'.\n- 장웨이의 소림 첫 수업은 한 번만."
+                    ),
+                )
+                _lc1, _lc2 = st.columns(2)
+                with _lc1:
+                    _l_all = st.checkbox("이미 있는 대장도 다시 만든다", value=False, key="ledger_redo_all")
+                _l_targets = _done_eps if _l_all else [e for e in _done_eps if e not in _led_have]
+                _lact = st.session_state.get("ledger_active")
+                with _lc2:
+                    if st.button(f"🧾 대장 만들기 ({len(_l_targets)}화)", use_container_width=True,
+                                 key="ledger_go", disabled=not _l_targets or bool(_lact)):
+                        st.session_state.ledger_active = {"targets": list(_l_targets), "done": [], "rating": rating}
+                        _lact = st.session_state.ledger_active
+                if _lact:
+                    _l_slot = _slot_of(_lact["rating"])
+                    _l_prog = st.progress(0.0, text="연속성 대장 만드는 중")
+                    for _e in [x for x in _lact["targets"] if x not in _lact["done"]]:
+                        _l_prog.progress(len(_lact["done"]) / max(1, len(_lact["targets"])),
+                                         text=f"EP{_e} 대장 추출 중 ({len(_lact['done']) + 1}/{len(_lact['targets'])})")
+                        if _l_slot.get(_e):
+                            _extract_ledger(_e, _l_slot[_e])
+                        _lact["done"].append(_e)
+                        st.session_state.ledger_active = _lact
+                    st.session_state.ledger_active = None
+                    autosave_project("연속성 대장")
+                    st.rerun()
+
+                _texts_now = {e: _slot_now[e] for e in _done_eps}
+                if _texts_now:
+                    _rep = cross_episode_repetition(_texts_now, names=_char_names(), top=20)
+                    _hv = hanja_variants(_texts_now)
+                    _meta = {e: scan_meta_leaks(t) for e, t in _texts_now.items() if scan_meta_leaks(t)}
+                    _sc = series_check(_ledger())
+                    st.markdown("**연재 점검 (5화 단위)**")
+                    if not _sc:
+                        st.caption("대장이 5화 이상 쌓이면 표시됩니다.")
+                    for _w in _sc:
+                        st.markdown(f"- {_w['range']}: " + (" · ".join(_w["flags"]) if _w["flags"] else "✅ 문제 없음"))
+                    st.markdown("**반복 표현 — 여러 회차에 걸쳐 되풀이 (다음 회차 금지어로 넘어감)**")
+                    st.markdown("\n".join(f"- {r['phrase']} — {r['count']}회 · EP{', '.join(str(x) for x in r['eps'])}"
+                                           for r in _rep) or "- 없음")
+                    if _hv:
+                        st.markdown("**한자 표기 불일치**")
+                        st.markdown("\n".join(f"- {w}: " + " / ".join(f"{h} (EP{', '.join(str(x) for x in es)})"
+                                                                        for h, es in v.items())
+                                               for w, v in _hv.items()))
+                    if _meta:
+                        st.markdown("**메타 노출 — 본문 속 회차 번호·# 기호 (🛠 보정에서 자동 정리)**")
+                        st.markdown("\n".join(f"- EP{e}: {', '.join(v)}" for e, v in _meta.items()))
+                    _nx = (max(_done_eps) + 1) if _done_eps else 1
+                    with st.expander(f"EP{_nx}을 쓸 때 들어갈 연속성 블록 미리보기", expanded=False):
+                        st.markdown(_continuity_for(_nx, rating) or "(대장이 없습니다)")
+
             with st.expander("⚡ 몰아쓰기 — 여러 회차를 연속으로 집필", expanded=False):
                 st.caption(
                     "회차마다 ① 플롯 → ② 본문 → ⑥ 회차 요약 → 📏 기준표 판정을 차례로 실행하고, "
@@ -3511,6 +3670,7 @@ with tab3:
                                 episode_plots=st.session_state.episode_plots,
                                 martial_bible=st.session_state.martial_bible,
                                 storyline_acts=st.session_state.storyline_acts,
+                                continuity_block=_continuity_for(selected_ep, rating),   # v2.15.0
                             ),
                             max_tokens=MAX_TOKENS_STRUCTURE,
                         )
@@ -3547,9 +3707,11 @@ with tab3:
                                 profession_blocks=profession_blocks,
                                 episode_plots=st.session_state.episode_plots,
                                 martial_bible=st.session_state.martial_bible,
+                                continuity_block=_continuity_for(selected_ep, rating),   # v2.15.0
                             ),
                             max_tokens=MAX_TOKENS_EPISODE,
                         )
+                        episode_text = _clean_episode_text(episode_text)
                         if rating == "19금":
                             st.session_state.episodes_19[selected_ep] = episode_text
                         else:
@@ -3777,10 +3939,12 @@ with tab3:
                     _plot_now = st.session_state.episode_plots.get(selected_ep)
 
                     def _run_standard(_text):
+                        _ph = _prev_ending(selected_ep, rating, 1000)       # v2.15.0
+                        _dn = ledger_done_text(_ledger(), selected_ep)      # v2.15.0
                         _raw = call_claude(
                             build_standard_check_prompt(
                                 _text, selected_ep, st.session_state.concept_card,
-                                _plot_now, _canon_txt,
+                                _plot_now, _canon_txt, prev_hook=_ph, done_text=_dn,
                             ),
                             max_tokens=MAX_TOKENS_ANALYSIS,
                             model=MODEL_SONNET,
@@ -3788,6 +3952,7 @@ with tab3:
                         return evaluate_episode_standard(
                             _text, selected_ep, safe_json(_raw),
                             st.session_state.concept_card, platform, _plot_now,
+                            has_prev_hook=bool(_ph), has_ledger=bool(_dn),
                         )
 
                     _sc1, _sc2 = st.columns(2)
@@ -4128,6 +4293,7 @@ with tab3:
                                 max_tokens=MAX_TOKENS_SMALL,
                             )
                             st.session_state.episode_summaries[selected_ep] = summary
+                            _extract_ledger(selected_ep, current_ep)   # v2.15.0 연속성 대장
                             st.success("✅ 요약 완료")
                             st.rerun()
 
