@@ -1,10 +1,11 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.12.4 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.5 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.5 (2026-11-21) — 원고 자동 저장·백업 (main.py, 룰 변경 없음)
 v2.12.4 (2026-11-09) — Core Arc도 분할 생성
   · [작가 지적] "처음 50화 분량도 쪼개서 해야 하는 거 아니고?" — 같은 잘림 위험
   · build_core_arc_outline_prompt() — 전체 뼈대 (재료는 Core Arc와 동일, 출력만 회차당 한 줄)
@@ -318,8 +319,8 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.12.4"
-ENGINE_BUILD_DATE = "2026-11-07"
+ENGINE_VERSION = "v2.12.5"
+ENGINE_BUILD_DATE = "2026-11-21"
 
 # ═══════════════════════════════════════════════════
 # SYSTEM PROMPT — 무협 웹소설 작가 페르소나

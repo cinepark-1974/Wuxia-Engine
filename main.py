@@ -1,9 +1,18 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.12.4 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.12.5 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.12.5 (2026-11-21) — 원고 자동 저장·백업
+  · [작가 요청] "원고는 중간중간 저장-백업되도록 해줘"
+    (11-21 실사용: Core Arc 30화에서 실행이 끊겨 세션 유실 위험 확인)
+  · autosave_project() — 프로젝트 전체를 autosave/작품명__시각.json으로 저장, 작품별 최근 10개 유지.
+    내용이 바뀌었을 때만 쓴다(본문 서명 비교). 실패해도 작업은 계속된다
+  · 저장 시점: Core·Extension 10화 구간마다, 회차 본문·재집필·5축 검수 직후, 매 화면 갱신 끝
+  · 💾 프로젝트 저장/불러오기 안에 🕘 자동 저장본 — 목록·되돌리기·내려받기
+  · 세션이 비었는데 자동 저장본이 있으면 상단에 안내, 사이드바에 마지막 자동 저장 시각
+  · 한계: 앱이 잠들거나 재부팅되면 서버 디스크가 비워진다 → JSON 내려받기 병행 안내
 v2.12.4 (2026-11-09) — Core Arc도 분할 생성
   · STEP 2 ① Core Arc: 뼈대 → 10화씩, 구간마다 저장, '▶ 이어서 생성 (EPn부터)'
   · generate_arc_chunked() — Core·Extension 공용 분할 생성 함수 (구간 검증·2회 실패 시 정지)
@@ -750,6 +759,7 @@ def generate_arc_chunked(state_key, outline_key, ep_start, total, outline_prompt
         fails = 0
         arc += take
         st.session_state[state_key] = arc
+        autosave_project(f"{label} EP{ep_start}~EP{ep_start + len(arc) - 1}")   # v2.12.5
     prog.progress(min(1.0, len(arc) / total), text=f"{label} {len(arc)}/{total}화")
     if len(arc) >= total:
         st.success(f"✅ {label} {len(arc)}화 생성 완료 (EP{ep_start}~EP{ep_start + len(arc) - 1})")
@@ -1206,6 +1216,85 @@ def restore_project_snapshot(data):
     return True
 
 
+# ──── v2.12.5: 자동 저장 (서버 디스크 · 프로젝트별 최근 10개) ────
+# 구간·회차가 끝날 때마다, 그리고 화면이 갱신될 때마다 내용이 바뀌었으면 저장한다.
+# 탭이 닫히거나 연결이 끊겨 세션이 사라져도 💾 자동 저장본에서 되살린다.
+# 한계: Streamlit Cloud가 앱을 재우거나(장기 미사용) 재부팅하면 디스크가 비워진다.
+#       → JSON 내려받기를 가끔 병행한다.
+import os as _as_os
+import zlib as _as_zlib
+
+AUTOSAVE_DIR = _as_os.path.join(_as_os.path.dirname(_as_os.path.abspath(__file__)), "autosave")
+AUTOSAVE_KEEP = 10
+
+
+def _autosave_title():
+    _c = st.session_state.get("concept_card")
+    t = _c.get("title", "") if isinstance(_c, dict) else ""
+    return re.sub(r"[^\w\-]", "_", t or "untitled")[:60] or "untitled"
+
+
+def autosave_project(reason=""):
+    """프로젝트 상태가 바뀌었으면 autosave/에 저장한다. 실패해도 작업은 멈추지 않는다."""
+    try:
+        if not (st.session_state.get("concept_card") or st.session_state.get("core_arc")
+                or st.session_state.get("episodes_15") or st.session_state.get("episodes_19")):
+            return None
+        snap = build_project_snapshot()
+        body = json.dumps({k: v for k, v in snap.items() if k != "saved_at"},
+                          ensure_ascii=False, default=str)
+        sig = _as_zlib.crc32(body.encode("utf-8"))
+        if st.session_state.get("_autosave_sig") == sig:
+            return None
+        _as_os.makedirs(AUTOSAVE_DIR, exist_ok=True)
+        title = _autosave_title()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        snap["_autosave_reason"] = reason
+        path = _as_os.path.join(AUTOSAVE_DIR, f"{title}__{stamp}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snap, f, ensure_ascii=False, default=str)
+        _as_os.replace(tmp, path)
+        st.session_state["_autosave_sig"] = sig
+        st.session_state["_autosave_last"] = {"at": datetime.now().strftime("%H:%M:%S"), "reason": reason}
+        olds = sorted(f for f in _as_os.listdir(AUTOSAVE_DIR)
+                      if f.startswith(title + "__") and f.endswith(".json"))
+        for f in olds[:-AUTOSAVE_KEEP]:
+            try:
+                _as_os.remove(_as_os.path.join(AUTOSAVE_DIR, f))
+            except OSError:
+                pass
+        return path
+    except Exception:
+        return None
+
+
+def list_autosaves():
+    """자동 저장본 목록 — 최신순 [{"file","path","title","at","eps","core","reason"}]."""
+    out = []
+    try:
+        files = [f for f in _as_os.listdir(AUTOSAVE_DIR) if f.endswith(".json")]
+    except OSError:
+        return out
+    for f in files:
+        p = _as_os.path.join(AUTOSAVE_DIR, f)
+        try:
+            with open(p, encoding="utf-8") as fh:
+                d = json.load(fh)
+        except Exception:
+            continue
+        cc = d.get("concept_card") if isinstance(d.get("concept_card"), dict) else {}
+        out.append({
+            "file": f, "path": p,
+            "title": cc.get("title") or f.split("__")[0],
+            "at": str(d.get("saved_at") or "")[:19].replace("T", " "),
+            "eps": len(d.get("episodes_15") or {}) + len(d.get("episodes_19") or {}),
+            "core": len(d.get("core_arc") or []),
+            "reason": d.get("_autosave_reason") or "",
+        })
+    return sorted(out, key=lambda x: x["file"].split("__")[-1], reverse=True)
+
+
 with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
     col_a, col_b = st.columns(2)
     with col_a:
@@ -1244,6 +1333,55 @@ with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
                     st.error(f"❌ 불러오기 실패: {e}")
             else:
                 st.success("✅ 프로젝트 복원 완료 (상단 STEP 2 · BUILD-UP 탭으로 이동하세요)")
+
+    # ──── v2.12.5: 자동 저장본 ────
+    st.markdown("---")
+    st.markdown("##### 🕘 자동 저장본")
+    st.caption(
+        "Core Arc·Extension 10화 구간, 회차 본문·재집필·검수가 끝날 때마다, 그리고 화면이 갱신될 때 "
+        "바뀐 내용이 있으면 자동으로 저장됩니다 (작품별 최근 10개). 앱이 오래 쉬어 잠들거나 재부팅되면 "
+        "자동 저장본도 지워지므로, 중요한 단계마다 위 📥 JSON 저장을 함께 해 두세요."
+    )
+    _as_list = list_autosaves()
+    if not _as_list:
+        st.caption("아직 자동 저장본이 없습니다.")
+    else:
+        _as_pick = st.selectbox(
+            "자동 저장본",
+            list(range(len(_as_list))),
+            format_func=lambda i: (f"{_as_list[i]['at']} · {_as_list[i]['title']} · Core {_as_list[i]['core']}화"
+                                   f" · 본문 {_as_list[i]['eps']}화"
+                                   + (f" · {_as_list[i]['reason']}" if _as_list[i]['reason'] else "")),
+            key="autosave_pick",
+            label_visibility="collapsed",
+        )
+        _asc1, _asc2 = st.columns(2)
+        with _asc1:
+            if st.button("↩ 이 자동 저장본으로 되돌리기", use_container_width=True, key="autosave_restore"):
+                try:
+                    with open(_as_list[_as_pick]["path"], encoding="utf-8") as _fh:
+                        if restore_project_snapshot(json.load(_fh)):
+                            st.session_state["_autosave_sig"] = None
+                            st.success("✅ 자동 저장본 복원 완료")
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 자동 저장본 불러오기 실패: {e}")
+        with _asc2:
+            try:
+                with open(_as_list[_as_pick]["path"], "rb") as _fh:
+                    st.download_button("📥 이 자동 저장본 내려받기 (.json)", data=_fh.read(),
+                                       file_name=_as_list[_as_pick]["file"], mime="application/json",
+                                       use_container_width=True, key="autosave_dl")
+            except OSError:
+                pass
+
+# 세션이 비어 있는데 자동 저장본이 있으면 알려 준다 (탭이 닫혔거나 연결이 끊긴 뒤)
+if not st.session_state.get("concept_card") and not st.session_state.get("core_arc"):
+    _as_top = list_autosaves()
+    if _as_top:
+        st.info(f"🕘 자동 저장본이 있습니다 — {_as_top[0]['at']} · {_as_top[0]['title']} · "
+                f"Core {_as_top[0]['core']}화 · 본문 {_as_top[0]['eps']}화. "
+                "위 💾 프로젝트 저장 / 불러오기에서 되돌릴 수 있습니다.")
 
 
 # ══════════════════════════════════════════════
@@ -2907,6 +3045,7 @@ with tab3:
                             st.session_state.episodes_19[selected_ep] = episode_text
                         else:
                             st.session_state.episodes_15[selected_ep] = episode_text
+                        autosave_project(f"EP{selected_ep} 본문")   # v2.12.5
                         st.success(f"✅ EP{selected_ep} 본문 완성 ({len(episode_text)}자)")
                         st.rerun()
 
@@ -2990,6 +3129,7 @@ with tab3:
                                 total_eps=len(target_arc) if target_arc else 50,
                             )
                             st.session_state.validation_results[selected_ep] = result
+                            autosave_project(f"EP{selected_ep} 검수")   # v2.12.5
                             st.success(f"✅ 검수 완료: {result['overall']}점 ({result['grade']})")
                             st.rerun()
 
@@ -3356,6 +3496,7 @@ with tab3:
                                     st.session_state.episodes_19[selected_ep] = redo_text
                                 else:
                                     st.session_state.episodes_15[selected_ep] = redo_text
+                                autosave_project(f"EP{selected_ep} 재집필")   # v2.12.5
                                 # 검수 결과 초기화 (재검수 유도)
                                 if selected_ep in st.session_state.validation_results:
                                     del st.session_state.validation_results[selected_ep]
@@ -3620,3 +3761,9 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("© 2026 BLUE JEANS PICTURES")
+
+# ──── v2.12.5: 화면 갱신 끝에 자동 저장 (바뀐 내용이 있을 때만) ────
+autosave_project("화면 갱신")
+_as_last = st.session_state.get("_autosave_last")
+if _as_last:
+    st.sidebar.caption(f"🕘 자동 저장 {_as_last['at']} · {_as_last['reason']}")

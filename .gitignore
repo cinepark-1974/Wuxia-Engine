@@ -56,3 +56,6 @@ exports/
 tmp/
 temp/
 *.log
+
+# 자동 저장본 (v2.12.5)
+autosave/
