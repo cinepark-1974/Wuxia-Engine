@@ -1,9 +1,12 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.14.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.14.1 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.14.1 (2026-11-21) — 보정 실패 시 정지
+  · [사고] 실제 앱에서 일괄 보정 13화가 'API 잔액 부족(400)'으로 모두 실패하며 끝까지 헛돎
+  · 한 회차가 실패하면 일괄 보정을 멈추고 이유를 표시. 실패 회차의 글자 수 표시를 '→0'에서 원래 값으로
 v2.14.0 (2026-11-21) — 🛠 기준 미달 보정
   · [작가 요청] "미달되는 건 어떻게 할 생각이야?" / "분량이 모자라면 무협으로 메꾼다. 초식. 싸움 장면. 세계관 설명 등."
   · fix_episode_pipeline(): 보정 전 원고를 버전으로 저장 → 구조 미달(M1·P1·C1·H1·A1·S1)은 재집필 1회 →
@@ -1595,6 +1598,7 @@ def fix_episode_pipeline(ep, rating, platform):
         return out
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        out["chars_after"] = out.get("chars_before", 0)   # v2.14.1: 실패 시 본문은 그대로
         return out
 
 
@@ -3352,6 +3356,11 @@ with tab3:
                         _r = fix_episode_pipeline(_e, _fact["rating"], _fact["platform"])
                         _f_log = [x for x in _f_log if x.get("ep") != _e] + [_r]
                         st.session_state.fix_log = _f_log
+                        if _r["status"] != "ok":
+                            # v2.14.1: 실패하면 거기서 멈춘다 (API 잔액 부족 등에서 13화를 헛돌지 않게)
+                            st.session_state.fix_active = None
+                            st.error(f"EP{_e} 보정에서 멈췄습니다 — {_r['error']}. 본문은 바뀌지 않았습니다.")
+                            st.stop()
                         _fact["done"].append(_e)
                         st.session_state.fix_active = _fact
                     st.session_state.fix_active = None
