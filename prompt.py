@@ -1,10 +1,16 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.13.2 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.14.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.14.0 (2026-11-21) — 기준 미달 보정 (분량은 무협으로 · 설정 위반은 그 문장만)
+  · [작가 방향] "분량이 모자라면 무협으로 메꾼다. 초식. 싸움 장면. 세계관 설명 등."
+  · build_length_extend_prompt() — 기존 문장 보존 · 마지막 장면 고정, 초식 시전(이름·동작·결과
+    + 원리·장점·약점) · 싸움 장면 합 교환 · 세계관 설명(바이블·확정 사항에 적힌 것만)으로 보강
+  · build_k1_fix_prompt() — 위반 문장만 {old,new}로 돌려받는다. 치환은 코드가 정확히 한다
+  · 기준표 Y1(또래 관계 변화): 어른·스승·교사와의 관계는 해당 없음을 명시 (EP1 오판 수정)
 v2.13.2 (2026-11-21) — 몰아쓰기 끊김 자동 재개 (main.py, 룰 변경 없음)
 v2.13.1 (2026-11-21) — 몰아쓰기 끝 회차 지정 (main.py, 룰 변경 없음)
 v2.13.0 (2026-11-21) — 몰아쓰기·묶음 저장 (main.py, 룰 변경 없음)
@@ -323,7 +329,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.13.2"
+ENGINE_VERSION = "v2.14.0"
 ENGINE_BUILD_DATE = "2026-11-21"
 
 # ═══════════════════════════════════════════════════
@@ -6876,7 +6882,8 @@ WUXIA_STANDARD_EPISODE = [
      "criterion": "이번 화에서 누군가 무언가를 잃거나 대가를 치른다 (부상·탈락·관계·자원·비밀)"},
     {"id": "Y1", "axis": "성장", "need": "권장", "check": "quote", "applies": "youth",
      "name": "또래 관계 변화",
-     "criterion": "주인공과 또래 한 명의 관계가 이번 화 안에서 달라지는 문장이 있다"},
+     "criterion": "주인공과 또래(같은 학생·같은 세대) 한 명의 관계가 이번 화 안에서 달라지는 문장이 있다. "
+                  "어른·스승·교사와의 관계는 해당하지 않는다 (v2.14.0)"},
     {"id": "H2", "axis": "글로벌", "need": "권장", "check": "static", "applies": "always",
      "name": "한자 병기 상한",
      "criterion": "괄호 한자 병기 횟수가 상한 이하다"},
@@ -7028,3 +7035,83 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
   "K1": [{{"quote": "", "conflicts_with": "어긋나는 확정 사항 한 줄"}}]
 }}
 items에는 위 기준 중 P1·K1을 뺀 모든 번호를 넣는다. JSON 외 텍스트 금지. 코드 블록 금지."""
+
+
+# ═══════════════════════════════════════════════════
+# v2.14.0 — 기준 미달 보정: 분량은 무협으로 채운다 · 설정 위반은 그 문장만 고친다
+# ───────────────────────────────────────────────────
+# 작가 방향: "분량이 모자라면 무협으로 메꾼다. 초식. 싸움 장면. 세계관 설명 등."
+#   → 대사·감상으로 늘리지 않는다. 초식 시전(이름·동작·결과 + 원리·장점·약점),
+#     싸움 장면의 합 교환, 세계관 설명(바이블·확정 사항에 있는 것만)으로 채운다.
+# ═══════════════════════════════════════════════════
+
+def build_length_extend_prompt(episode_text, ep_number, target_min, target_max,
+                               concept_card=None, martial_bible=None,
+                               episode_plots=None, character_bible=None):
+    """분량 보강 — 기존 문장은 하나도 지우지 않고, 무협 장면을 덧붙여 분량을 채운다."""
+    cur = len(episode_text or "")
+    need = max(0, target_min + 300 - cur)
+    try:
+        martial = build_martial_registry_block(
+            _parse_characters_arg(character_bible), episode_plots, ep_number,
+            martial_bible=martial_bible,
+        )
+    except Exception:
+        martial = ""
+    world = build_world_bible_block(concept_card) if concept_card else ""
+    return f"""당신은 한국 무협 웹소설 작가입니다. 아래 EP{ep_number} 본문은 {cur:,}자로,
+연재 기준({target_min:,}~{target_max:,}자)에 {max(0, target_min - cur):,}자 모자랍니다.
+**무협 장면으로** 약 {need:,}자를 보강해 {target_min + 300:,}~{target_max - 200:,}자로 만드세요.
+
+## 보강 방법 — 무협으로 채운다 (대사·감상·회상으로 늘리지 않는다)
+1. 초식 시전: 본문에 이미 나온 초식을 펼치는 자리에서 이름 · 몸의 동작 · 눈에 보이는 결과를
+   한 장면으로 보여 주고, 그 초식의 원리 · 장점 · 약점을 서술자가 짧게 풀어 준다.
+2. 싸움 장면: 이미 있는 대결·대치 장면 안에서 합(공격과 방어)을 두세 번 더 주고받게 한다.
+   힘의 차이, 거리, 호흡, 발놀림, 무기와 지형이 보이게 쓴다.
+3. 세계관 설명: 장소·학교·세력·제도가 처음 나오는 자리에서 아래 세계관 바이블과 작가 확정 사항에
+   **이미 적힌 내용만** 서술로 풀어 준다.
+
+## 지켜야 할 것
+- 기존 문장은 하나도 지우거나 바꾸지 않는다. 문장 순서도 그대로 둔다. 덧붙이기만 한다.
+- 마지막 장면(클리프행어)은 손대지 않는다. 보강은 그 앞에서만 한다.
+- 새 인물 이름 · 새 초식명 · 새 고유명사를 만들지 않는다. 초식은 아래 목록과 본문에 있는 것만 쓴다.
+- 세계관 바이블의 '미정' 항목(대회 출전권 구조, 경지 체계 등)을 본문에서 새로 정하지 않는다.
+- 한자 병기는 첫 등장 고유명사에만 붙인다.
+
+{world}
+
+{martial}
+
+## EP{ep_number} 본문 (이 글을 그대로 두고 보강한다)
+{episode_text}
+
+보강한 본문 전체만 출력하세요. 설명·표시·JSON 없이 순수 본문."""
+
+
+def build_k1_fix_prompt(episode_text, violations, canon_text="", ep_number=0):
+    """설정 위반 교정 — 판정관이 짚은 문장만 바꿀 문장으로 돌려받는다 (코드가 정확히 치환)."""
+    vio = "\n".join(
+        f"- 문장: 「{v.get('quote', '')}」\n  어긋난 기준: {v.get('conflicts_with', '')}"
+        for v in (violations or []) if isinstance(v, dict) and v.get("quote")
+    )
+    return f"""무협 웹소설 EP{ep_number} 본문에서 작가 설정과 어긋나는 문장을 고칩니다.
+아래 '위반 문장'만 바꾸고 나머지 본문은 건드리지 않습니다.
+
+## 위반 문장
+{vio}
+
+## 작가 확정 사항 · 세계관 (이것과 어긋나면 안 된다)
+{(canon_text or "")[:8000]}
+
+## 고치는 법
+- old: 본문에 있는 문장을 한 글자도 바꾸지 말고 그대로 복사한다 (위반 문장이 포함된 문장 전체).
+- new: 같은 자리에 들어갈 문장. 앞뒤 흐름은 살리고, 정해지지 않은 설정을 정하지 않는다.
+  설정을 단정하던 부분은 인물의 짐작·인상·비교로 바꾸거나 빼낸다. 문장째 빼야 하면 new를 ""로 둔다.
+- 새 인물 이름 · 새 고유명사를 만들지 않는다.
+
+## 본문 (참고용 — 문장을 정확히 복사하기 위해)
+{(episode_text or "")[:24000]}
+
+## 출력 — JSON 배열만
+[{{"old": "", "new": ""}}]
+JSON 외 텍스트 금지. 코드 블록 금지."""

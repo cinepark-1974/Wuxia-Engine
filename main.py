@@ -1,9 +1,18 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.13.2 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.14.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.14.0 (2026-11-21) — 🛠 기준 미달 보정
+  · [작가 요청] "미달되는 건 어떻게 할 생각이야?" / "분량이 모자라면 무협으로 메꾼다. 초식. 싸움 장면. 세계관 설명 등."
+  · fix_episode_pipeline(): 보정 전 원고를 버전으로 저장 → 구조 미달(M1·P1·C1·H1·A1·S1)은 재집필 1회 →
+    K1 위반 문장만 교정({old,new} 정확 치환) → 분량 부족은 무협 보강(기존 문단 90% 이상·마지막 장면
+    보존을 코드가 확인, 아니면 반려) → 재판정 → 자동 저장
+    재집필 결과가 원래 분량의 80% 미만이면 반려
+  · STEP 3 🛠 기준 미달 보정 칸: 미달 회차 자동 선택, 끊겨도 이어 가는 일괄 보정, 전/후 결과 표
+  · 기준표 칸: 'EP 보정' 버튼, 보정 전 버전 선택·되돌리기 (회차당 5개)
+  · 몰아쓰기: '기준 미달이면 보정 1회' 체크박스 (기본 켬)
 v2.13.2 (2026-11-21) — 몰아쓰기 끊김 자동 재개
   · [사고] 실제 앱에서 EP2~15 몰아쓰기가 EP3 직후 멈춤 (Core Arc 30화 끊김과 같은 양상:
     10~15분쯤 화면이 다시 실행되며 진행 중이던 반복이 잘림)
@@ -451,6 +460,9 @@ from prompt import (
     build_canon_excerpt,
     # v2.12.0 신규 — 최고의 무협 기준표
     build_standard_check_prompt,
+    # v2.14.0 신규 — 기준 미달 보정
+    build_length_extend_prompt,
+    build_k1_fix_prompt,
     build_narrative_devices_prompt,
     build_narrative_device_block,
     NARRATIVE_DEVICE_FIELDS,
@@ -983,6 +995,9 @@ defaults = {
     "batch_log": [],              # v2.13.0 — 마지막 몰아쓰기 결과
     "bundle_unit_val": 5,         # v2.13.0
     "batch_active": None,         # v2.13.2 — 진행 중인 몰아쓰기 계획 (세션 전용, 백업 제외)
+    "fix_active": None,           # v2.14.0 — 진행 중인 보정 계획 (세션 전용)
+    "fix_log": [],                # v2.14.0
+    "episode_versions": {},       # v2.14.0 — {ep: [{text, at, reason, rating, chars}]}
     "extension_mode": "bridge",
     "extension_eps": 50,
     "plant_map_core": {},
@@ -1065,6 +1080,7 @@ PROJECT_KEYS = [
     # v2.11.0: 진단 결과와 채택표
     "brief_diagnosis", "adoption_block",
     "bundle_downloaded", "batch_log",   # v2.13.0
+    "episode_versions", "fix_log",      # v2.14.0
     # v2.12.0: 기준표 판정 · 기준점 원고
     "standard_results", "benchmarks", "benchmark_results",
 ]
@@ -1237,6 +1253,7 @@ EPISODE_KEYED_KEYS = [
     "episode_summaries", "quality_reports", "validation_results",
     "episode_meta",   # v2.10.0
     "standard_results", "benchmarks", "benchmark_results",   # v2.12.0
+    "episode_versions",   # v2.14.0
 ]
 
 
@@ -1332,7 +1349,7 @@ def list_autosaves():
 
 
 # ──── v2.13.0: 회차 한 편 파이프라인 (몰아쓰기용) ────
-def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=True):
+def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=True, fix=False):
     """플롯 → 본문 → 회차 요약 → (기준표 판정) → 자동 저장.
 
     플롯이 이미 있으면 그대로 쓴다. 본문은 새로 쓴다(이전 본문의 검수·판정은 지운다).
@@ -1430,11 +1447,155 @@ def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=T
             S.standard_results[ep] = r
             res["verdict"], res["fail_ids"] = r.get("verdict", ""), r.get("fail_ids") or []
         autosave_project(f"EP{ep} 완료 (몰아쓰기)")
+        # ⑤ v2.14.0: 기준 미달이면 보정 1회 (작가가 몰아쓰기에서 체크한 경우만)
+        if judge and fix and res.get("verdict") == "기준 미달":
+            fx = fix_episode_pipeline(ep, rating, platform)
+            res["verdict"] = fx.get("after") or res["verdict"]
+            res["fail_ids"] = fx.get("fails_after", res["fail_ids"])
+            res["chars"] = fx.get("chars_after") or res["chars"]
+            res["fixed"] = " · ".join(fx.get("steps") or [])
         res["status"] = "ok"
         return res
     except Exception as e:
         res["error"] = f"{type(e).__name__}: {str(e)[:200]}"
         return res
+
+
+# ──── v2.14.0: 기준 미달 보정 ────
+def _push_version(ep, rating, reason):
+    """보정 전 원고를 버전으로 남긴다 (회차당 최근 5개)."""
+    S = st.session_state
+    slot = S.episodes_19 if rating == "19금" else S.episodes_15
+    if not slot.get(ep):
+        return
+    vers = dict(S.get("episode_versions") or {})
+    lst = list(vers.get(ep) or [])
+    lst.append({"text": slot[ep], "at": datetime.now().strftime("%m-%d %H:%M"),
+                "reason": reason, "rating": rating, "chars": len(slot[ep])})
+    vers[ep] = lst[-5:]
+    S.episode_versions = vers
+
+
+def _judge_episode(ep, text, platform):
+    S = st.session_state
+    cc = S.concept_card
+    canon = "\n\n".join(x for x in (_effective_direction(), build_world_bible_block(cc)) if x and x.strip())
+    r = evaluate_episode_standard(
+        text, ep,
+        safe_json(call_claude(
+            build_standard_check_prompt(text, ep, cc, S.episode_plots.get(ep), canon),
+            max_tokens=MAX_TOKENS_ANALYSIS, model=MODEL_SONNET,
+        )),
+        cc, platform, S.episode_plots.get(ep),
+    )
+    S.standard_results[ep] = r
+    return r
+
+
+def _k1_violations(res):
+    """기준표 결과에서 K1 위반 문장 목록 — v2.14.0 이전 결과는 표 행에서 복원."""
+    v = [x for x in (res.get("violations") or []) if isinstance(x, dict) and x.get("quote")]
+    if v:
+        return v
+    for r in res.get("rows") or []:
+        if r.get("id") == "K1" and r.get("status") == "미달" and r.get("quote"):
+            qs = [q.strip() for q in str(r["quote"]).split(" | ") if q.strip()]
+            cs = [c.replace("↔", "").strip() for c in str(r.get("detail") or "").split(" / ")]
+            return [{"quote": q, "conflicts_with": cs[i] if i < len(cs) else ""} for i, q in enumerate(qs)]
+    return []
+
+
+def fix_episode_pipeline(ep, rating, platform):
+    """기준 미달 회차 보정: (필요 시) 재집필 → 설정 위반 문장 교정 → 무협 분량 보강 → 재판정.
+
+    보정 전 원고는 episode_versions에 남는다.
+    Returns: {"ep","status","before","after","steps","chars_before","chars_after","error"}
+    """
+    S = st.session_state
+    cc = S.concept_card
+    slot = S.episodes_19 if rating == "19금" else S.episodes_15
+    out = {"ep": ep, "status": "fail", "before": "", "after": "", "steps": [],
+           "chars_before": 0, "chars_after": 0, "error": ""}
+    try:
+        text = slot.get(ep) or ""
+        if not text:
+            out["error"] = "본문 없음"
+            return out
+        out["chars_before"] = len(text)
+        res = S.standard_results.get(ep)
+        if not res or res.get("text_sig") != standard_text_sig(text):
+            res = _judge_episode(ep, text, platform)
+        out["before"] = res.get("verdict", "")
+        fails = list(res.get("fail_ids") or [])
+        if not fails:
+            out.update(status="ok", after=out["before"], chars_after=len(text))
+            return out
+        _push_version(ep, rating, f"보정 전 ({', '.join(fails)})")
+        plen = PLATFORM_LENGTH.get(platform, {"min": 5000, "max": 6000})
+
+        # ① 구조 미달(M1·P1·C1·H1·A1·S1)은 재집필 1회
+        struct = [f for f in fails if f not in ("L1", "K1")]
+        if struct:
+            new = call_claude_opus(
+                build_episode_redo_prompt(
+                    text, ep, {}, cc, json.dumps(S.character_bible, ensure_ascii=False),
+                    prose_scan_report=format_standard_report(res, ep_number=ep, for_redo=True),
+                    episode_plots=S.episode_plots, martial_bible=S.martial_bible,
+                ),
+                max_tokens=MAX_TOKENS_EPISODE,
+            ) or ""
+            if len(new.strip()) >= max(1500, int(len(text) * 0.8)):
+                text = new
+                out["steps"].append(f"재집필({', '.join(struct)})")
+                res = _judge_episode(ep, text, platform)
+            else:
+                out["steps"].append(f"재집필 반려 ({len(new.strip()):,}자 — 원래의 80% 미만)")
+
+        # ② 설정 위반 문장만 교정 — 코드가 정확히 치환
+        vio = _k1_violations(res) if "K1" in (res.get("fail_ids") or []) else []
+        if vio:
+            canon = "\n\n".join(x for x in (_effective_direction(), build_world_bible_block(cc)) if x and x.strip())
+            pairs = safe_json(call_claude(build_k1_fix_prompt(text, vio, canon, ep),
+                                          max_tokens=MAX_TOKENS_STRUCTURE))
+            n_fix = 0
+            for p in (pairs if isinstance(pairs, list) else []):
+                if not isinstance(p, dict):
+                    continue
+                old, new_s = str(p.get("old") or ""), str(p.get("new") or "")
+                if len(old) >= 6 and text.count(old) == 1:
+                    text = text.replace(old, new_s)
+                    n_fix += 1
+            if n_fix:
+                out["steps"].append(f"설정 위반 문장 {n_fix}곳 교정")
+
+        # ③ 분량이 모자라면 무협으로 보강 — 기존 문장·마지막 장면이 남았는지 코드가 확인
+        if len(text) < plen["min"]:
+            ext = call_claude_opus(
+                build_length_extend_prompt(text, ep, plen["min"], plen["max"], cc,
+                                           martial_bible=S.martial_bible,
+                                           episode_plots=S.episode_plots,
+                                           character_bible=S.character_bible),
+                max_tokens=MAX_TOKENS_EPISODE,
+            ) or ""
+            paras = [p.strip() for p in text.split("\n") if len(p.strip()) >= 15]
+            kept = sum(1 for p in paras if p in ext) / max(1, len(paras))
+            last_ok = (not paras) or (paras[-1] in ext[-max(400, len(paras[-1]) + 200):])
+            if len(ext) > len(text) and kept >= 0.9 and last_ok:
+                out["steps"].append(f"무협 분량 보강 {len(text):,}→{len(ext):,}자")
+                text = ext
+            else:
+                out["steps"].append(f"분량 보강 반려 (기존 문장 보존 {kept:.0%}, 마지막 장면 {'유지' if last_ok else '변경'})")
+
+        slot[ep] = text
+        S.validation_results.pop(ep, None)
+        res = _judge_episode(ep, text, platform)
+        out.update(status="ok", after=res.get("verdict", ""), chars_after=len(text),
+                   fails_after=res.get("fail_ids") or [])
+        autosave_project(f"EP{ep} 보정")
+        return out
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        return out
 
 
 with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
@@ -3088,6 +3249,8 @@ with tab3:
                     )
                 _b_skip = st.checkbox("이미 본문이 있는 회차는 건너뛴다", value=True, key="batch_skip")
                 _b_judge = st.checkbox("회차마다 📏 기준표 판정", value=True, key="batch_judge")
+                _b_fix = st.checkbox("기준 미달이면 🛠 보정 1회 (재집필·위반 문장 교정·무협 분량 보강)",
+                                     value=True, key="batch_fix", disabled=not _b_judge)
                 _b_n = None if _b_count in ("끝까지", "끝 회차 지정") else int(_b_count.replace("화", ""))
                 _b_targets = [e for e in ep_options if e >= _b_start and (_b_end is None or e <= _b_end)]
                 if _b_skip:
@@ -3110,7 +3273,7 @@ with tab3:
                              key="batch_go", disabled=not _b_targets or bool(_bact)):
                     st.session_state.batch_active = {
                         "targets": list(_b_targets), "done": [], "rating": rating, "platform": platform,
-                        "judge": bool(_b_judge), "arc": arc_source,
+                        "judge": bool(_b_judge), "arc": arc_source, "fix": bool(_b_judge and _b_fix),
                     }
                     st.session_state.batch_log = []
                     _bact = st.session_state.batch_active
@@ -3130,7 +3293,8 @@ with tab3:
                         _k = len(_bact["done"]) + 1
                         _b_prog.progress((_k - 1) / len(_b_all),
                                          text=f"EP{_e} 집필 중 ({_k}/{len(_b_all)}) — 플롯 → 본문 → 요약 → 기준표")
-                        _r = write_episode_pipeline(_e, _b_arc, _bact["arc"], _b_rating, _b_plat, judge=_bact["judge"])
+                        _r = write_episode_pipeline(_e, _b_arc, _bact["arc"], _b_rating, _b_plat,
+                                                    judge=_bact["judge"], fix=_bact.get("fix", False))
                         _b_log = [x for x in _b_log if x.get("ep") != _e] + [_r]
                         st.session_state.batch_log = _b_log
                         if _r["status"] != "ok":
@@ -3151,6 +3315,56 @@ with tab3:
                         _rows.append(f"| EP{_r['ep']} | {'완료' if _r['status'] == 'ok' else '실패'} | "
                                      f"{_r['chars']:,} | {_r['verdict'] or '—'} | "
                                      f"{', '.join(_r['fail_ids']) or (_r['error'] if _r['status'] != 'ok' else '—')} |")
+                    st.markdown("\n".join(_rows))
+
+
+            # ──── v2.14.0: 🛠 기준 미달 보정 ────
+            _std_all = st.session_state.standard_results or {}
+            _under = [e for e in sorted(_done_eps)
+                      if (_std_all.get(e) or {}).get("verdict") == "기준 미달"]
+            with st.expander(f"🛠 기준 미달 보정 — 미달 {len(_under)}화", expanded=False):
+                st.caption(
+                    "미달 회차를 차례로 보정합니다: 구조 미달(M1·P1·C1·H1)은 재집필 1회 → 설정 위반(K1)은 "
+                    "판정관이 짚은 문장만 교정 → 분량 부족(L1)은 초식 시전 · 싸움 장면 · 세계관 설명으로 보강 "
+                    "(기존 문장은 지우지 않음) → 다시 판정. 보정 전 원고는 회차별로 5개까지 남아 기준표 칸에서 "
+                    "되돌릴 수 있습니다. 회차당 3~6분."
+                )
+                _fx_pick = st.multiselect("보정할 회차", _done_eps, default=_under, key="fix_pick",
+                                          format_func=lambda e: f"EP{e} " + ",".join((_std_all.get(e) or {}).get("fail_ids") or []))
+                _fact = st.session_state.get("fix_active")
+                if _fact and st.button("⏹ 보정 중지", key="fix_stop", use_container_width=True):
+                    st.session_state.fix_active = None
+                    _fact = None
+                    st.rerun()
+                if st.button(f"🛠 선택한 {len(_fx_pick)}화 보정", type="primary", use_container_width=True,
+                             key="fix_go", disabled=not _fx_pick or bool(_fact)):
+                    st.session_state.fix_active = {"targets": list(_fx_pick), "done": [],
+                                                   "rating": rating, "platform": platform}
+                    st.session_state.fix_log = []
+                    _fact = st.session_state.fix_active
+                if _fact:
+                    _f_all = _fact["targets"]
+                    _f_prog = st.progress(len(_fact["done"]) / max(1, len(_f_all)), text="보정 진행 중")
+                    _f_log = list(st.session_state.get("fix_log") or [])
+                    for _e in [x for x in _f_all if x not in _fact["done"]]:
+                        _k = len(_fact["done"]) + 1
+                        _f_prog.progress((_k - 1) / len(_f_all), text=f"EP{_e} 보정 중 ({_k}/{len(_f_all)})")
+                        _r = fix_episode_pipeline(_e, _fact["rating"], _fact["platform"])
+                        _f_log = [x for x in _f_log if x.get("ep") != _e] + [_r]
+                        st.session_state.fix_log = _f_log
+                        _fact["done"].append(_e)
+                        st.session_state.fix_active = _fact
+                    st.session_state.fix_active = None
+                    st.rerun()
+                _flog = st.session_state.get("fix_log") or []
+                if _flog:
+                    st.markdown("**마지막 보정 결과**")
+                    _rows = ["| 회차 | 전 | 후 | 글자 수 | 한 일 | 남은 미달 |", "|---|---|---|---|---|---|"]
+                    for _r in _flog:
+                        _rows.append(f"| EP{_r['ep']} | {_r.get('before') or '—'} | {_r.get('after') or ('실패' if _r['status'] != 'ok' else '—')} | "
+                                     f"{_r.get('chars_before', 0):,}→{_r.get('chars_after', 0):,} | "
+                                     f"{' · '.join(_r.get('steps') or []) or (_r.get('error') or '—')} | "
+                                     f"{', '.join(_r.get('fails_after') or []) or '—'} |")
                     st.markdown("\n".join(_rows))
 
             with st.expander("📦 묶음 저장 — 5화·10화 단위 원고 DOCX + 백업 JSON",
@@ -3616,6 +3830,37 @@ with tab3:
                     if _bm_res:
                         with st.expander("작가 원고(기준점) 판정 상세", expanded=False):
                             st.markdown(format_standard_report(_bm_res, ep_number=selected_ep))
+
+                    # v2.14.0: 이 회차 보정 · 보정 전 버전으로 되돌리기
+                    _vc1, _vc2 = st.columns(2)
+                    with _vc1:
+                        if _std_res and _std_res.get("verdict") == "기준 미달" and not _std_stale:
+                            if st.button(f"🛠 EP{selected_ep} 보정", key=f"fix_one_{selected_ep}",
+                                         use_container_width=True):
+                                with st.spinner("보정 중 (재집필 · 위반 문장 교정 · 무협 분량 보강 · 재판정)..."):
+                                    _fx = fix_episode_pipeline(selected_ep, rating, platform)
+                                st.session_state.fix_log = [_fx]
+                                st.rerun()
+                    _vers = (st.session_state.episode_versions or {}).get(selected_ep) or []
+                    with _vc2:
+                        if _vers:
+                            _vi = st.selectbox(
+                                "보정 전 버전", list(range(len(_vers)))[::-1],
+                                format_func=lambda i: f"{_vers[i]['at']} · {_vers[i]['chars']:,}자 · {_vers[i]['reason']}",
+                                key=f"ver_pick_{selected_ep}", label_visibility="collapsed",
+                            )
+                            if st.button("↩ 이 버전으로 되돌리기", key=f"ver_back_{selected_ep}",
+                                         use_container_width=True):
+                                _push_version(selected_ep, rating, "되돌리기 전")
+                                _slot_v = st.session_state.episodes_19 if rating == "19금" else st.session_state.episodes_15
+                                _slot_v[selected_ep] = _vers[_vi]["text"]
+                                st.session_state.standard_results.pop(selected_ep, None)
+                                autosave_project(f"EP{selected_ep} 되돌리기")
+                                st.rerun()
+                    _fl1 = [x for x in (st.session_state.get("fix_log") or []) if x.get("ep") == selected_ep]
+                    if _fl1:
+                        st.caption(f"마지막 보정: {_fl1[-1].get('before')} → {_fl1[-1].get('after')} · "
+                                   f"{' · '.join(_fl1[-1].get('steps') or []) or _fl1[-1].get('error', '')}")
 
                 # ──── 초식 일관성 검사 (v2.5.0 — 정적 검출, API 미사용) ────
                 martial_scan = scan_martial_consistency(

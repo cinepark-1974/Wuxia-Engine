@@ -3031,6 +3031,7 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
     have_llm = bool(llm_items) or bool(llm.get("P1")) or "K1" in llm
     cache = {}
     rows = []
+    violations = []   # v2.14.0: K1 위반 문장 (보정용) [{"quote","conflicts_with"}]
 
     def row(it, status, detail="", quote=""):
         rows.append({"id": it["id"], "name": it["name"], "need": it["need"], "axis": it["axis"],
@@ -3084,6 +3085,7 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
                 q = str(v.get("quote") or "")
                 if q.strip() and _std_locate(q, text, cache) is not None:
                     found.append((q, str(v.get("conflicts_with") or "")))
+            violations = [{"quote": q, "conflicts_with": c} for q, c in found]
             if not found:
                 row(it, "충족", "어긋나는 문장 없음")
             else:
@@ -3119,7 +3121,7 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
         verdict = "판정 보류"
     else:
         verdict = "기준 충족"
-    return {"verdict": verdict, "fail_ids": fail, "rows": rows,
+    return {"verdict": verdict, "fail_ids": fail, "rows": rows, "violations": violations,
             "text_sig": standard_text_sig(text), "ep": int(ep_number or 0)}
 
 
