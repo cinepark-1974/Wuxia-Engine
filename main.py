@@ -1,9 +1,20 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.17.1 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.18.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.18.0 (2026-11-22) — 📋 작업 현황판
+  · [작가 지적] "뭔가 너만 알고. UI가 불편한 건 뭐지?" — 엔진 상태를 화면이 직접 말하게 한다
+  · 화면 맨 위 작업 현황판: 원고 n화 · 기준 미달 n화 · 마지막 백업 시각
+    - 백업 상태: 마지막으로 받은 JSON 이후 바뀐 회차·Core Arc를 표시 ('백업 필요 — EP12'), 바로 옆에 받기 버튼
+    - 전체 원고 DOCX 만들기·받기 (현재 본문 전체)
+    - 진행 중 작업(몰아쓰기·보정·대장·구간 재설계) 표시
+    - 다음 할 일: 백업 → 미달 처리 → (재설계 끝 회차까지 썼으면) 다음 구간 재설계 → 몰아쓰기 시작 회차
+  · 새로고침·창 닫기 경고: 백업 안 된 변경이 있거나 작업이 돌 때만 브라우저가 묻는다
+  · 빈 세션에서 '가장 최근 자동 저장본 불러오기' 버튼을 맨 위에 바로 표시
+  · 모든 백업 JSON 버튼(현황판·프로젝트 저장·묶음 저장)이 마지막 백업 시점을 기록. JSON 불러오기 = 백업 최신
+  · 🛠 보정 회차 선택칸: 처음에는 비워 두고 '미달 전체 선택' 버튼을 따로 둔다
 v2.17.1 (2026-11-22) — 보정 절약형
   · 구조 미달 재집필(본문 전체 재출력)은 '구조 미달은 본문 전체 재집필' 체크박스(fix_redo, 기본 끔)를 켰을 때만.
     끄면 표에 '재집필 안 함 (작가 확인)'으로 남긴다
@@ -389,6 +400,7 @@ v2.0 (2026-05) — Quality Validator + IdeaSeed System
 v1.0 (2026-XX) — 초기 무협 엔진
 """
 import streamlit as st
+import streamlit.components.v1 as _components   # v2.18.0 — 새로고침 경고
 from bj_header import render_header  # 공통 헤더 (Writer Engine 기준)
 import anthropic
 import json
@@ -1874,6 +1886,53 @@ def fix_episode_pipeline(ep, rating, platform):
         return out
 
 
+# ──── v2.18.0: 작업 현황판 헬퍼 ────
+# [작가 지적] "뭔가 너만 알고. UI가 불편한 건 뭐지?" — 백업이 최신인지, 새로고침하면 무엇이 사라지는지,
+# 다음에 무엇을 해야 하는지를 화면이 스스로 말하게 한다.
+def _work_sigs():
+    """회차 본문·Core Arc의 지문 — 마지막 백업과 비교해 무엇이 바뀌었는지 찾는다."""
+    S = st.session_state
+    sig = {}
+    for rt, key in (("15", "episodes_15"), ("19", "episodes_19")):
+        for e, t in (S.get(key) or {}).items():
+            if t:
+                sig[f"{rt}:{e}"] = _as_zlib.crc32(t.encode("utf-8"))
+    sig["core"] = _as_zlib.crc32(json.dumps(S.get("core_arc") or [], ensure_ascii=False).encode("utf-8"))
+    return sig
+
+
+def _mark_backup():
+    """백업 JSON을 내려받는 순간 호출 — 이 시점이 '마지막 백업'이 된다."""
+    st.session_state["_backup_sigs"] = _work_sigs()
+    st.session_state["_backup_at"] = datetime.now().strftime("%H:%M")
+
+
+def _backup_changes():
+    """마지막 백업 이후 바뀐 것 — ['EP12', 'Core Arc'] (백업한 적 없으면 None)."""
+    old = st.session_state.get("_backup_sigs")
+    if old is None:
+        return None
+    now = _work_sigs()
+    out = []
+    eps = sorted({int(k.split(":")[1]) for k in set(now) | set(old)
+                  if k != "core" and now.get(k) != old.get(k)})
+    out += [f"EP{e}" for e in eps]
+    if now.get("core") != old.get("core"):
+        out.append("Core Arc")
+    return out
+
+
+def _revised_through():
+    """구간 재설계가 어디까지 됐나 — core_arc_versions 기록('EP2~15 재설계 전')에서 끝 회차."""
+    ends = []
+    for v in st.session_state.get("core_arc_versions") or []:
+        m = re.search(r"EP(\d+)~(\d+) 재설계", str((v or {}).get("reason", "")))
+        if m:
+            ends.append(int(m.group(2)))
+    return max(ends) if ends else 0
+
+
+
 with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
     col_a, col_b = st.columns(2)
     with col_a:
@@ -1888,6 +1947,7 @@ with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
             file_name=f"{safe_title}_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
             mime="application/json",
             use_container_width=True,
+            on_click=_mark_backup,     # v2.18.0
         )
     with col_b:
         uploaded_project = st.file_uploader(
@@ -1904,6 +1964,8 @@ with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
                     loaded = json.loads(uploaded_project.read().decode("utf-8"))
                     if restore_project_snapshot(loaded):
                         st.session_state["_restored_file_sig"] = _file_sig
+                        _mark_backup()   # v2.18.0 — 불러온 JSON이 곧 마지막 백업
+                        st.session_state["_backup_at"] = "불러온 파일"
                         st.success("✅ 프로젝트 복원 완료")
                         st.rerun()
                     else:
@@ -1941,6 +2003,8 @@ with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
                     with open(_as_list[_as_pick]["path"], encoding="utf-8") as _fh:
                         if restore_project_snapshot(json.load(_fh)):
                             st.session_state["_autosave_sig"] = None
+                            st.session_state["_backup_sigs"] = None   # v2.18.0 — 자동 저장본은 백업이 아니다
+                            st.session_state["_backup_at"] = None
                             st.success("✅ 자동 저장본 복원 완료")
                             st.rerun()
                 except Exception as e:
@@ -1958,9 +2022,144 @@ with st.expander("💾 프로젝트 저장 / 불러오기", expanded=False):
 if not st.session_state.get("concept_card") and not st.session_state.get("core_arc"):
     _as_top = list_autosaves()
     if _as_top:
-        st.info(f"🕘 자동 저장본이 있습니다 — {_as_top[0]['at']} · {_as_top[0]['title']} · "
-                f"Core {_as_top[0]['core']}화 · 본문 {_as_top[0]['eps']}화. "
-                "위 💾 프로젝트 저장 / 불러오기에서 되돌릴 수 있습니다.")
+        with st.container(border=True):
+            st.warning(f"🕘 이전 작업이 남아 있습니다 — {_as_top[0]['at']} · {_as_top[0]['title']} · "
+                       f"Core {_as_top[0]['core']}화 · 본문 {_as_top[0]['eps']}화"
+                       + (f" · {_as_top[0]['reason']}" if _as_top[0].get('reason') else ""))
+            if st.button("↩ 가장 최근 자동 저장본 불러오기", type="primary", use_container_width=True,
+                         key="autosave_quick_restore"):   # v2.18.0 — 한 번에 되살리기
+                try:
+                    with open(_as_top[0]["path"], encoding="utf-8") as _fh:
+                        if restore_project_snapshot(json.load(_fh)):
+                            st.session_state["_autosave_sig"] = None
+                            st.session_state["_backup_sigs"] = None
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 불러오기 실패: {e}")
+            st.caption("다른 시점이 필요하면 위 💾 프로젝트 저장 / 불러오기 → 🕘 자동 저장본에서 고릅니다. "
+                       "앱이 오래 잠들었다 깨면 자동 저장본도 지워지므로, 그때는 받아 둔 백업 JSON을 불러옵니다.")
+
+# ══════════════════════════════════════════════
+# v2.18.0 — 📋 작업 현황판 (화면 맨 위)
+# ══════════════════════════════════════════════
+def _render_work_board():
+    S = st.session_state
+    cc = S.get("concept_card")
+    if not (cc or S.get("core_arc") or S.get("episodes_15") or S.get("episodes_19")):
+        return
+    slot_key = "episodes_15" if (S.get("episodes_15") or not S.get("episodes_19")) else "episodes_19"
+    rt = "15금" if slot_key == "episodes_15" else "19금"
+    slot = {int(k): v for k, v in (S.get(slot_key) or {}).items() if str(k).isdigit() and v}
+    done = sorted(slot)
+    n_cont = 0
+    while (n_cont + 1) in slot:
+        n_cont += 1
+    std = S.get("standard_results") or {}
+    under = [e for e in done if (std.get(e) or std.get(str(e)) or {}).get("verdict") == "기준 미달"]
+    core_n = len(S.get("core_arc") or [])
+    changes = _backup_changes()
+    dirty = changes is None or bool(changes)
+    active = []
+    for key, label in (("batch_active", "⚡ 몰아쓰기"), ("fix_active", "🛠 보정"),
+                       ("ledger_active", "🧾 대장 만들기"), ("rev_active", "🔁 구간 재설계")):
+        a = S.get(key)
+        if a:
+            if key == "batch_active":
+                tg = a.get("targets") or []
+                dn = a.get("done") or []
+                active.append(f"{label} EP{tg[0] if tg else ''}~EP{tg[-1] if tg else ''} ({len(dn)}/{len(tg)}화 완료)")
+            elif key == "rev_active":
+                active.append(f"{label} EP{a.get('start')}~EP{a.get('end')}")
+            else:
+                active.append(f"{label} ({len(a.get('done') or [])}/{len(a.get('targets') or [])}화)")
+
+    with st.container(border=True):
+        st.markdown("**📋 작업 현황판**")
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"원고 ({rt})", f"{len(done)}화" + (f" / {core_n}" if core_n else ""))
+        c2.metric("기준 미달", f"{len(under)}화")
+        c3.metric("마지막 백업", S.get("_backup_at") or "없음")
+
+        # 백업 상태
+        if changes is None:
+            st.error("💾 이 세션에서 아직 백업 JSON을 받지 않았습니다. 새로고침하거나 앱이 잠들면 지금 화면의 작업이 사라집니다.")
+        elif changes:
+            st.error("💾 백업 필요 — 마지막 백업 이후 바뀐 것: " + ", ".join(changes[:12])
+                     + (" …" if len(changes) > 12 else ""))
+        else:
+            st.success(f"💾 백업 최신 ({S.get('_backup_at')}) — 지금 화면과 마지막으로 받은 JSON이 같습니다.")
+        _title = re.sub(r"[^\w\-]", "_", (cc or {}).get("title", "wuxia") if isinstance(cc, dict) else "wuxia")[:40]
+        b1, b2 = st.columns(2)
+        with b1:
+            st.download_button(
+                "💾 백업 JSON 받기", type="primary" if dirty else "secondary",
+                data=json.dumps(build_project_snapshot(), ensure_ascii=False, indent=2).encode("utf-8"),
+                file_name=f"{_title}_EP{n_cont:03d}_백업_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                mime="application/json", use_container_width=True, key="board_json", on_click=_mark_backup,
+            )
+        with b2:
+            if done:
+                if S.get("_board_docx_sig") == _work_sigs().get("core", 0) + sum(
+                        v for k, v in _work_sigs().items() if k != "core") and S.get("_board_docx"):
+                    st.download_button(
+                        f"📄 전체 원고 DOCX 받기 (EP{done[0]}~EP{done[-1]})", data=S["_board_docx"],
+                        file_name=f"{_title}_EP{done[0]:03d}-{done[-1]:03d}_{rt}_원고.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True, key="board_docx_dl",
+                    )
+                elif st.button(f"📄 전체 원고 DOCX 만들기 (EP{done[0]}~EP{done[-1]})",
+                               use_container_width=True, key="board_docx_make"):
+                    try:
+                        S["_board_docx"] = build_season_docx(
+                            slot, cc, rating="19" if rt == "19금" else "15",
+                            platform=(cc or {}).get("target_platform", "문피아") if isinstance(cc, dict) else "문피아",
+                        )
+                        _ws = _work_sigs()
+                        S["_board_docx_sig"] = _ws.get("core", 0) + sum(v for k, v in _ws.items() if k != "core")
+                        st.rerun()
+                    except Exception as _ex:
+                        st.caption(f"DOCX 생성 실패: {_ex}")
+
+        # 진행 중 작업
+        for a in active:
+            st.info(f"⏳ 진행 중: {a} — 끊겨도 남은 회차부터 이어 갑니다. 이 창을 닫거나 새로고침하지 마세요.")
+
+        # 다음 할 일
+        steps = []
+        if dirty:
+            steps.append("위 💾 백업 JSON 받기")
+        if not cc:
+            steps.append("STEP 1에서 컨셉 카드 만들기")
+        elif not core_n:
+            steps.append("STEP 2에서 Core Arc 50화 설계")
+        elif not active:
+            if under:
+                steps.append(f"기준 미달 {len(under)}화 (EP{', EP'.join(str(e) for e in under[:8])}"
+                             + (" …" if len(under) > 8 else "")
+                             + ") — 직접 고치거나 STEP 3 🛠 기준 미달 보정에서 고를 회차만 보정")
+            rv = _revised_through()
+            if n_cont < core_n:
+                if rv and n_cont >= rv:
+                    steps.append(f"EP{n_cont + 1}~EP{min(core_n, n_cont + 5)} 설계는 구간 재설계 전 것입니다 — "
+                                 f"STEP 2 Core Arc 🔁 구간 재설계로 새 EP{n_cont} 엔딩에 맞추기")
+                steps.append(f"STEP 3 ⚡ 몰아쓰기 — 시작 EP{n_cont + 1}")
+            else:
+                steps.append("50화 완주 — 📄 전체 원고 DOCX 받기")
+        if steps:
+            st.markdown("**다음 할 일**\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1)))
+
+    # 새로고침·창 닫기 경고 — 백업 안 된 변경이 있거나 작업이 돌고 있을 때만
+    _need_guard = "true" if (dirty or active) else "false"
+    _components.html(
+        "<script>try{const w=window.parent;w.__bjDirty=" + _need_guard + ";"
+        "if(!w.__bjHooked){w.addEventListener('beforeunload',function(e){if(w.__bjDirty){e.preventDefault();"
+        "e.returnValue='';}});w.__bjHooked=true;}}catch(e){}</script>",
+        height=0,
+    )
+
+
+_render_work_board()
+
 
 
 # ══════════════════════════════════════════════
@@ -3792,10 +3991,18 @@ with tab3:
                     "되돌릴 수 있습니다. 회차당 3~6분."
                 )
                 # v2.14.3: 미달 목록이 바뀌면 선택을 새 미달 목록으로 맞춘다 (default 변동으로 선택이 비던 버그)
+                # v2.18.0: 처음에는 비워 둔다 — 한 화만 고칠 때 전부 지울 필요가 없게. 전체는 버튼으로.
                 if st.session_state.get("_fix_pick_sig") != tuple(_under) or any(
                         x not in _done_eps for x in (st.session_state.get("fix_pick") or [])):
-                    st.session_state["fix_pick"] = list(_under)
+                    st.session_state["fix_pick"] = [x for x in (st.session_state.get("fix_pick") or [])
+                                                    if x in _done_eps]
                     st.session_state["_fix_pick_sig"] = tuple(_under)
+
+                def _fix_pick_all(_u=tuple(_under)):
+                    st.session_state["fix_pick"] = list(_u)
+
+                st.button(f"미달 {len(_under)}화 전체 선택", key="fix_pick_all", on_click=_fix_pick_all,
+                          disabled=not _under)
                 _fx_pick = st.multiselect("보정할 회차", _done_eps, key="fix_pick",
                                           format_func=lambda e: f"EP{e} " + ",".join((_std_all.get(e) or {}).get("fail_ids") or []))
                 _fact = st.session_state.get("fix_active")
@@ -4727,6 +4934,7 @@ with tab3:
                             data=json.dumps(build_project_snapshot(), ensure_ascii=False, indent=2).encode("utf-8"),
                             file_name=f"{_btitle}_EP{_be:03d}_백업_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
                             mime="application/json", use_container_width=True, key=f"bundle_json_{_bkey}",
+                            on_click=_mark_backup,
                         ):
                             st.session_state.bundle_downloaded = sorted(_got | {_bkey})
                     st.caption("백업 JSON은 지금까지의 프로젝트 전체입니다. 💾 프로젝트 불러오기로 올리면 이 시점부터 이어서 씁니다.")
