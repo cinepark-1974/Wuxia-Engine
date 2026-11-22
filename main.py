@@ -1,9 +1,16 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.19.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.20.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.20.0 (2026-11-22) — 대사·지문 줄바꿈 원칙 (작가 지정)
+  · 집필·보정이 끝날 때마다 format_dialogue_paragraphs() 적용 — 대사는 독립 문단, 지문은 다른 문단,
+    두 인물의 대사는 한 문단에 넣지 않음. 예외: 짧은 화자 표시(말했다·물었다…)는 같은 문단, 문장 속 인용은 지문 안
+  · 글자는 바꾸지 않는다 (공백 제외 글자가 하나라도 달라지면 원문 유지하는 안전장치)
+  · 🧾 연속성 대장 칸: '↵ 줄바꿈 정리' — 이미 있는 회차 일괄 정리 (정리 전 원고는 버전 보관)
+  · 📥 수정 원고 일괄 불러오기: '등록하면서 줄바꿈 원칙 적용' 체크박스 (기본 켬)
+  · 기준표 F1 대사 줄바꿈(필수, 코드 판정) — 미달이면 🛠 보정에서 코드가 문단을 나눔
 v2.19.0 (2026-11-22) — 작가 검토 반영: 상태 장부 · 세계관 사전 · AI 말투 차단 · 수정 원고 일괄 불러오기
   · 판정: Q1(상태·회상 정합)에 ledger_state_text, T1/T2(문체)에 세계관 사전 @상징 규칙, K1에 세계관 사전
   · 연속성 블록: 세계관 사전 + 상태 장부(앞 화 끝 상태·소지품·대사 기록·'처음'·해설한 기술·단서) + 오래 안 나온 인물(E1)
@@ -591,6 +598,7 @@ from engine_validator import (
     hanja_variants,                 # v2.15.0
     series_check,                   # v2.15.0,
     style_scan, parse_symbol_rules, roster_gaps, STYLE_LABELS,   # v2.19.0
+    format_dialogue_paragraphs, dialogue_layout_issues,           # v2.20.0
 )
 
 
@@ -1441,8 +1449,9 @@ _HEAD_HASH_RE = re.compile(r"^[ \t]*#{1,6}[ \t]*", re.M)
 
 
 def _clean_episode_text(t):
-    """본문 정리 — 줄 앞 마크다운 제목 기호(#) 제거 (목차·DOCX에 '#'이 남던 문제)."""
-    return _HEAD_HASH_RE.sub("", t or "")
+    """본문 정리 — 줄 앞 마크다운 제목 기호(#) 제거 + v2.20.0 대사·지문 줄바꿈 원칙 (글자는 그대로, 문단만)."""
+    t = _HEAD_HASH_RE.sub("", t or "")
+    return format_dialogue_paragraphs(t)[0]
 
 
 def _char_names():
@@ -1770,7 +1779,7 @@ def fix_episode_pipeline(ep, rating, platform):
         plen = PLATFORM_LENGTH.get(platform, {"min": 5000, "max": 6000})
 
         # ① 구조 미달(M1·P1·C1·H1·A1·S1)은 재집필 1회 — v2.17.1: 작가가 켠 경우만 (본문 전체 재출력, 비용 큼)
-        struct = [f for f in fails if f not in ("L1", "K1", "R1", "X2", "T1", "Q1", "D1")]
+        struct = [f for f in fails if f not in ("L1", "K1", "R1", "X2", "T1", "Q1", "D1", "F1")]
         if struct and not S.get("fix_redo", False):
             out["steps"].append(f"구조 미달 {', '.join(struct)} — 재집필 안 함 (작가 확인)")
             struct = []
@@ -1895,6 +1904,10 @@ def fix_episode_pipeline(ep, rating, platform):
             elif n_del:
                 out["steps"].append(f"분량 압축 반려 ({len(trimmed):,}자 — 하한에 너무 가까움)")
 
+        _t2, _nl = format_dialogue_paragraphs(text)      # v2.20.0 — 삽입·교정 뒤에도 줄바꿈 원칙
+        if _nl:
+            text = _t2
+            out["steps"].append(f"대사·지문 줄바꿈 {_nl}문단")
         slot[ep] = text
         S.validation_results.pop(ep, None)
         res = _judge_episode(ep, text, platform, rating)
@@ -3847,6 +3860,8 @@ with tab3:
                     st.dataframe([{"회차": f"EP{e}", "수정 원고": f"{len(t):,}자",
                                    "현재 본문": f"{len(_cur.get(e) or ''):,}자" if _cur.get(e) else "없음"}
                                   for e, t in sorted(_parsed.items())], hide_index=True, use_container_width=True)
+                    _bulk_fmt = st.checkbox("등록하면서 대사·지문 줄바꿈 원칙 적용 (글자는 그대로, 문단만 나눔)",
+                                            value=True, key="bulk_import_fmt")
                     if st.button(f"EP{min(_parsed)}~EP{max(_parsed)} {len(_parsed)}화를 본문으로 등록 ({rating})",
                                  type="primary", key="bulk_import_go"):
                         _slot_k = "episodes_19" if rating == "19금" else "episodes_15"
@@ -3854,7 +3869,7 @@ with tab3:
                         _m = dict(st.session_state.episode_meta or {})
                         for _e, _t in sorted(_parsed.items()):
                             _push_version(_e, rating, "작가 수정 원고 등록 전")
-                            st.session_state[_slot_k][_e] = _t
+                            st.session_state[_slot_k][_e] = format_dialogue_paragraphs(_t)[0] if _bulk_fmt else _t
                             _m[_e] = {"source": "author", "file": "일괄 불러오기",
                                       "imported_at": datetime.now().isoformat(timespec="seconds")}
                             for _k in ("episode_summaries", "validation_results", "standard_results"):
@@ -3886,6 +3901,20 @@ with tab3:
                         "- 지훈 시점에서 신유선 호칭은 '이사장님'.\n- 장웨이의 소림 첫 수업은 한 번만."
                     ),
                 )
+                # v2.20.0 — 대사·지문 줄바꿈 일괄 정리
+                _lay_n = {e: len(dialogue_layout_issues(_slot_now[e], 999)) for e in _done_eps if _slot_now.get(e)}
+                _lay_bad = {e: n for e, n in _lay_n.items() if n}
+                if _lay_bad:
+                    st.markdown(f"**↵ 대사·지문 줄바꿈** — 원칙을 어긴 문단: "
+                                + ", ".join(f"EP{e} {n}곳" for e, n in list(_lay_bad.items())[:15]))
+                    if st.button(f"↵ {len(_lay_bad)}화 줄바꿈 정리 (글자는 그대로, 문단만 나눔 · 정리 전 원고는 버전 보관)",
+                                 key="layout_fix_all"):
+                        _sk = "episodes_19" if rating == "19금" else "episodes_15"
+                        for _e in _lay_bad:
+                            _push_version(_e, rating, "줄바꿈 정리 전")
+                            st.session_state[_sk][_e] = format_dialogue_paragraphs(st.session_state[_sk][_e])[0]
+                        autosave_project("대사·지문 줄바꿈 정리")
+                        st.rerun()
                 # v2.19.0 — 📚 세계관 사전 (B1·C5)
                 st.markdown("**📚 세계관 사전** — 무공·무기·고유명사의 정의와 한자 표기, 호칭, 상징 오브젝트의 반응 조건. "
                             "여기 적은 확정본이 매 회차 집필·판정에 들어갑니다. "

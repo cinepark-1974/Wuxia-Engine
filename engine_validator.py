@@ -5,6 +5,7 @@
 · 초식 일관성 정적 검사 · 장르 밀도 정적 검사
 
 [변경 이력]
+v2.20.0 (2026-11-22) — format_dialogue_paragraphs()·dialogue_layout_issues(): 대사·지문 줄바꿈 원칙, 기준표 F1
 v2.19.0 (2026-11-22) — 문체 검증기 style_scan() (T1 필수·T2 권장), roster_gaps(), 기준표 Q1·D1 위반 수집
 v2.17.0 (2026-11-22) — scan_meta_leaks()가 '1학년 A' · '이름 미정' 같은 이름 자리표시도 잡는다
 v2.10.0 (2026-11-07) — 서사 장치 연속성 · 출처 없는 인물 검출 · 인물명 오검출 수정
@@ -3058,6 +3059,11 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
             row(it, "충족" if not leaks else "미달",
                 "없음" if not leaks else "발견: " + ", ".join(leaks[:6]))
             continue
+        if iid == "F1":           # v2.20.0 대사·지문 줄바꿈
+            _li = dialogue_layout_issues(text, 999)
+            row(it, "충족" if not _li else "미달",
+                "원칙대로" if not _li else f"{len(_li)}문단 — 예: {_li[0][:60]}")
+            continue
         if iid in ("T1", "T2"):   # v2.19.0 문체
             keys = STYLE_T1 if iid == "T1" else STYLE_T2
             _sc = style_scan(text, symbol_rules)
@@ -3452,6 +3458,124 @@ def style_violations(scan, limit=10, keys=None):
                         }.get(key, "")})
             if len(out) >= limit:
                 return out
+    return out
+
+
+# ═══════════════════════════════════════════════════
+# v2.20.0 — 대사·지문 줄바꿈 원칙 (작가 지정)
+# ───────────────────────────────────────────────────
+# 1. 대사는 따옴표로 시작하는 독립 문단  2. 대사 앞뒤 지문은 다른 문단  3. 두 인물의 대사를 한 문단에 넣지 않음
+# 예외 ① 대사 바로 뒤 짧은 화자 표시 한 문장(말했다·물었다…)은 같은 문단 — 행동이 섞이면 예외 아님
+# 예외 ② 문장 속 인용(“…”라고 / “…” 하고 / “…”라는)은 지문 안에 그대로
+# 단어는 바꾸지 않는다 — 문단 경계(줄바꿈)만 다시 놓는다.
+_SPEECH_VERBS = ("말했다", "물었다", "대답했다", "답했다", "덧붙였다", "속삭였다", "중얼거렸다", "소리쳤다",
+                 "외쳤다", "되물었다", "말을 이었다", "말을 받았다", "투덜거렸다", "중얼댔다", "웅얼거렸다", "고함쳤다")
+_TAG_RE = re.compile(r"^[가-힣A-Za-z]{1,8}(이|가|은|는|도)?\s(?:[가-힣]{1,6}\s)?(" + "|".join(_SPEECH_VERBS) + r")[.!]?$")
+_INLINE_AFTER = re.compile(r"^\s?(라고|라는|라며|라면서|라던|란|이라고|이라는|이라며|하고|하며|하는|하던|하면서|고\s|며\s|는\s|던\s)")
+_TERM = re.compile(r"(?<=[.!?…])\s+")
+
+
+def _split_quotes(line):
+    """한 줄 → [('q'|'n', 텍스트)]. 짝이 안 맞는 따옴표가 있으면 None."""
+    out, i, n = [], 0, len(line)
+    buf = ""
+    while i < n:
+        ch = line[i]
+        if ch in "“\"":
+            close = "”" if ch == "“" else "\""
+            j = line.find(close, i + 1)
+            if j == -1:
+                return None
+            if buf:
+                out.append(("n", buf)); buf = ""
+            out.append(("q", line[i:j + 1]))
+            i = j + 1
+        else:
+            buf += ch
+            i += 1
+    if buf:
+        out.append(("n", buf))
+    return out
+
+
+def _layout_line(line):
+    """한 문단 → 원칙에 맞춘 문단 목록."""
+    segs = _split_quotes(line)
+    if not segs or not any(k == "q" for k, _ in segs):
+        return [line]
+    # 문장 속 인용은 지문에 합친다 (예외 ②)
+    merged = []
+    for idx, (k, t) in enumerate(segs):
+        nxt = segs[idx + 1][1] if idx + 1 < len(segs) else ""
+        prev_n = merged[-1][1] if merged and merged[-1][0] == "n" else ""
+        inline = k == "q" and (_INLINE_AFTER.match(nxt) is not None
+                               or (prev_n and not re.search(r"[.!?…]\s*$", prev_n) and prev_n.strip()
+                                   and not re.search(r"[.!?…”\"]\s*$", prev_n)))
+        if (k == "n" or inline) and merged and merged[-1][0] == "n":
+            merged[-1] = ("n", merged[-1][1] + t)
+        elif inline:
+            merged.append(("n", t))
+        else:
+            merged.append((k, t))
+    # 단위로 쪼갠다: 대사 / 지문 문장들
+    units = []
+    for k, t in merged:
+        if k == "q":
+            units.append(["q", t.strip()])
+        else:
+            for sn in [x for x in _TERM.split(t.strip()) if x.strip()]:
+                units.append(["n", sn.strip()])
+    paras, cur = [], None
+    for idx, (k, t) in enumerate(units):
+        if k == "q":
+            if cur:
+                paras.append(cur)
+            cur = ["q", t]
+        else:
+            if cur and cur[0] == "q" and not cur[2:] and _TAG_RE.match(t):
+                cur.append(t)                  # 화자 표시 (예외 ①)
+                paras.append(cur); cur = None
+            elif cur and cur[0] == "n":
+                cur.append(t)
+            else:
+                if cur:
+                    paras.append(cur)
+                cur = ["n", t]
+    if cur:
+        paras.append(cur)
+    return [" ".join(p[1:]) for p in paras]
+
+
+def format_dialogue_paragraphs(text):
+    """원고 전체에 줄바꿈 원칙을 적용한다. 반환: (새 본문, 바뀐 문단 수). 글자(공백 제외)는 그대로다."""
+    if not text:
+        return text, 0
+    sep = "\n\n" if text.count("\n\n") >= max(3, text.count("\n") * 0.3) else "\n"
+    out, changed = [], 0
+    for line in text.split("\n"):
+        if not line.strip():
+            out.append(line)
+            continue
+        parts = _layout_line(line)
+        if len(parts) > 1:
+            changed += 1
+            out.append(sep.join(parts))
+        else:
+            out.append(line)
+    new = "\n".join(out)
+    if re.sub(r"\s+", "", new) != re.sub(r"\s+", "", text):   # 안전장치: 글자가 달라지면 원문 유지
+        return text, 0
+    return new, changed
+
+
+def dialogue_layout_issues(text, limit=8):
+    """줄바꿈 원칙을 어긴 문단 예시 (판정 표시용)."""
+    out = []
+    for line in (text or "").split("\n"):
+        if line.strip() and len(_layout_line(line)) > 1:
+            out.append(line.strip()[:120])
+            if len(out) >= limit:
+                break
     return out
 
 
