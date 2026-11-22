@@ -8,6 +8,10 @@ DOCX 출력 모듈
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.20.1 (2026-11-23) — 글꼴 함초롬바탕 통일 (작가 지정)
+  · BODY_FONT·HEADING_FONT도 함초롬바탕 — 표지·목차·회차 메타·기획서·무공 대전까지 전부
+  · _add_run(): 한글(eastAsia)만이 아니라 영문(ascii·hAnsi)·기타(cs)까지 같은 글꼴로 지정
+  · _set_doc_font(): 문서의 모든 스타일 기본 글꼴을 함초롬바탕으로 (테마 글꼴 해제)
 v2.8.1 (2026-11-06) — 원고 서식 재복구 (사고 패턴 F 재발 대응)
   · [사고 원인] 2026-07-27 v2.8.0(둥근 따옴표·함초롬바탕·여백 2.0cm)이
     완성됐지만, 2026-07-28 v2.7.2(A32·구분선 정렬) 패치가 v2.8.0이 아닌
@@ -67,8 +71,9 @@ DIM = RGBColor(0x8E, 0x8E, 0x99)
 LIGHT_BG = "EEEEF6"
 YELLOW_BG = "FFCB05"
 
-BODY_FONT = "맑은 고딕"  # 범용. 나눔고딕으로도 변경 가능
-HEADING_FONT = "맑은 고딕"
+# v2.20.1: 작가 지정 — DOCX 전체(표지·목차·본문·메타·기획서·무공 대전)를 함초롬바탕으로 통일
+BODY_FONT = "함초롬바탕"
+HEADING_FONT = "함초롬바탕"
 
 # v2.8.1: 원고 서식 (회차·시즌 DOCX 전용)
 MANUSCRIPT_FONT = "함초롬바탕"   # 원고 본문·제목. 곧은 따옴표·맑은 고딕은 AI 원고 신호
@@ -139,8 +144,33 @@ def to_smart_quotes(text):
     return "\n".join(_smart_quotes_line(ln) for ln in text.split("\n"))
 
 
+def _set_doc_font(doc, font=MANUSCRIPT_FONT):
+    """v2.20.1 — 문서 기본값(docDefaults)과 모든 스타일의 글꼴을 영문·한글·기타 모두 같은 글꼴로. 테마 글꼴은 지운다."""
+    root = doc.styles.element
+    # 기본값에 rFonts가 없으면 만든다
+    for rpr in root.iter(qn("w:rPr")):
+        if rpr.getparent() is not None and rpr.getparent().tag == qn("w:rPrDefault") and rpr.find(qn("w:rFonts")) is None:
+            rpr.insert(0, OxmlElement("w:rFonts"))
+    for style in root.iter(qn("w:style")):
+        rpr = style.find(qn("w:rPr"))
+        if rpr is None:
+            rpr = OxmlElement("w:rPr")
+            style.append(rpr)
+        if rpr.find(qn("w:rFonts")) is None:
+            rpr.insert(0, OxmlElement("w:rFonts"))
+    for rf in root.iter(qn("w:rFonts")):
+        if any(a is not None and a.tag == qn("w:latentStyles") for a in rf.iterancestors()):
+            continue
+        for k in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+            if rf.get(qn(k)) is not None:
+                del rf.attrib[qn(k)]
+        for k in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+            rf.set(qn(k), font)
+
+
 def _setup_page(doc):
-    """A4 + 상·하·좌·우 PAGE_MARGIN_CM 여백 (v2.8.1)."""
+    """A4 + 상·하·좌·우 PAGE_MARGIN_CM 여백 (v2.8.1) + 문서 기본 글꼴 함초롬바탕 (v2.20.1)."""
+    _set_doc_font(doc)
     section = doc.sections[0]
     section.page_height = Cm(29.7)
     section.page_width = Cm(21.0)
@@ -213,7 +243,8 @@ def _add_run(paragraph, text, font=BODY_FONT, size=11, bold=False,
     if rfonts is None:
         rfonts = OxmlElement("w:rFonts")
         rpr.append(rfonts)
-    rfonts.set(qn("w:eastAsia"), font)
+    for k in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):   # v2.20.1: 영문·숫자도 같은 글꼴
+        rfonts.set(qn(k), font)
     return run
 
 

@@ -1,10 +1,11 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.20.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.20.1 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.20.1 (2026-11-23) — DOCX 글꼴 함초롬바탕 통일 (docx_builder.py, 룰 변경 없음)
 v2.20.0 (2026-11-22) — 대사·지문 줄바꿈 원칙: 집필 규칙(WUXIA_STYLE_RULES)·기준표 F1 추가. 정리는 코드(engine_validator)가 한다
 v2.19.0 (2026-11-22) — 작가 검토 반영: 상태 장부 · 세계관 사전 · AI 말투 차단
   · [작가 요청] 「아미고」 EP1~15 검토에서 반복된 문제(연속성·설정·문체·비문·구조)를 엔진에서 차단
@@ -378,7 +379,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.20.0"
+ENGINE_VERSION = "v2.20.1"
 ENGINE_BUILD_DATE = "2026-11-22"
 
 # ═══════════════════════════════════════════════════

@@ -1,9 +1,10 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.20.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.20.1 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.20.1 (2026-11-23) — DOCX 글꼴 함초롬바탕 통일: 표지·목차·본문·메타·기획서·무공 대전, 영문·숫자까지 (docx_builder)
 v2.20.0 (2026-11-22) — 대사·지문 줄바꿈 원칙 (작가 지정)
   · 집필·보정이 끝날 때마다 format_dialogue_paragraphs() 적용 — 대사는 독립 문단, 지문은 다른 문단,
     두 인물의 대사는 한 문단에 넣지 않음. 예외: 짧은 화자 표시(말했다·물었다…)는 같은 문단, 문장 속 인용은 지문 안
