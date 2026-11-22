@@ -1,10 +1,14 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.17.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.17.1 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.17.1 (2026-11-22) — 보정 절약형 (본문 통째 재출력 없애기)
+  · [작가 지적] "다시쓰기하면서 낭비하는 게 아닐까? 수정된 부분만 정리할 수는 없나?"
+  · 원인: 보정이 ① 구조 미달이면 본문 전체 재집필 ② 분량 보강도 본문 전체를 다시 출력 — 회차당 6,000자 출력이 두 번 더
+  · build_length_insert_prompt() — 덧붙일 문단과 붙일 자리(원문 문장)만 JSON으로 받는다. 삽입은 코드가 한다
 v2.17.0 (2026-11-22) — 단역 이름 자동 부여
   · [작가 방향] "이름 없는 것은 자동으로 생성해. 중요한 인물이 아니라서 겹치지만 않으면 됨."
   · 연재 드라마 규칙 7 변경: 이름 없는 단역은 '1학년 A'처럼 알파벳 자리표시로 적고, 엔진이 이름을 붙인다.
@@ -362,7 +366,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.17.0"
+ENGINE_VERSION = "v2.17.1"
 ENGINE_BUILD_DATE = "2026-11-22"
 
 # ═══════════════════════════════════════════════════
@@ -7173,6 +7177,57 @@ def build_length_extend_prompt(episode_text, ep_number, target_min, target_max,
 {episode_text}
 
 보강한 본문 전체만 출력하세요. 설명·표시·JSON 없이 순수 본문."""
+
+
+def build_length_insert_prompt(episode_text, ep_number, target_min, target_max,
+                               concept_card=None, martial_bible=None,
+                               episode_plots=None, character_bible=None,
+                               continuity_block=""):
+    """v2.17.1 — 분량 보강 (절약형): 본문 전체를 다시 받지 않고 '어디 뒤에 무엇을 덧붙일지'만 받는다.
+
+    기존 방식은 6,000자 본문을 통째로 다시 출력해 비용이 컸다. 여기서는 덧붙일 문단만 받고
+    삽입은 코드가 원문 일치 문장 뒤에 정확히 한다. 기존 문장은 구조상 바뀔 수 없다.
+    """
+    cur = len(episode_text or "")
+    need = max(0, target_min + 300 - cur)
+    try:
+        martial = build_martial_registry_block(
+            _parse_characters_arg(character_bible), episode_plots, ep_number,
+            martial_bible=martial_bible,
+        )
+    except Exception:
+        martial = ""
+    world = build_world_bible_block(concept_card) if concept_card else ""
+    return f"""당신은 한국 무협 웹소설 작가입니다. 아래 EP{ep_number} 본문은 {cur:,}자로,
+연재 기준({target_min:,}~{target_max:,}자)에 {max(0, target_min - cur):,}자 모자랍니다.
+본문을 다시 쓰지 말고, **덧붙일 문단만** 만들어 합계 약 {need:,}자를 보강하세요.
+
+## 보강 방법 — 무협으로 채운다 (대사·감상·회상으로 늘리지 않는다)
+1. 초식 시전: 본문에 이미 나온 초식을 펼치는 자리 뒤에 이름 · 몸의 동작 · 눈에 보이는 결과와
+   그 초식의 원리 · 장점 · 약점을 짧게 풀어 준다.
+2. 싸움 장면: 이미 있는 대결·대치 장면 안에서 합(공격과 방어)을 두세 번 더 주고받게 한다.
+3. 세계관 설명: 장소·제도가 처음 나오는 자리 뒤에 아래 세계관 바이블에 **이미 적힌 내용만** 풀어 준다.
+   아래 '이미 설명한 세계관'에 있는 항목은 다시 설명하지 않는다.
+
+## 지켜야 할 것
+- after에는 본문에 있는 문장 하나를 **한 글자도 바꾸지 말고** 그대로 복사한다 (그 문장 뒤에 덧붙는다).
+- 마지막 장면(본문 끝 15%) 안의 문장은 after로 고르지 않는다.
+- 덧붙인 문단은 앞뒤 문장과 바로 이어져 읽혀야 한다. 다음 문장이 할 일을 미리 하지 않는다.
+- 새 인물 이름 · 새 초식명 · 새 고유명사를 만들지 않는다. 세계관의 '미정' 항목을 새로 정하지 않는다.
+- 2~4곳에 나눠 덧붙인다. 한 곳에 몰지 않는다.
+
+{world}
+
+{martial}
+
+{continuity_block}
+
+## EP{ep_number} 본문 (참고용 — after 문장을 정확히 복사하기 위해)
+{episode_text}
+
+## 출력 — JSON 배열만
+[{{"after": "본문에 있는 문장 그대로", "add": "덧붙일 문단"}}]
+JSON 외 텍스트 금지. 코드 블록 금지."""
 
 
 def build_k1_fix_prompt(episode_text, violations, canon_text="", ep_number=0):

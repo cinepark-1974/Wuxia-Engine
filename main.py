@@ -1,9 +1,14 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.17.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.17.1 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.17.1 (2026-11-22) — 보정 절약형
+  · 구조 미달 재집필(본문 전체 재출력)은 '구조 미달은 본문 전체 재집필' 체크박스(fix_redo, 기본 끔)를 켰을 때만.
+    끄면 표에 '재집필 안 함 (작가 확인)'으로 남긴다
+  · 분량 보강: 본문 통째 재출력 → 덧붙일 문단만 받아 _insert_paragraphs()가 원문 문장 뒤에 끼워 넣음
+    (끝 15% 마지막 장면은 손대지 않음, 기존 문장은 구조상 바뀌지 않음)
 v2.17.0 (2026-11-22) — 단역 이름 자동 부여
   · _assign_minor_names() — 매 실행마다 Core·Extension Arc·회차 플롯에 남은 자리표시에 이름을 붙인다.
     이미 붙인 이름은 그대로, 원고 본문은 건드리지 않는다. 회차 집필 때 플롯 생성 직후 한 번 더 확인
@@ -507,6 +512,7 @@ from prompt import (
     apply_minor_names,
     parse_minor_names_text,
     _fix_josa,
+    build_length_insert_prompt,            # v2.17.1 — 절약형 분량 보강
     build_narrative_devices_prompt,
     build_narrative_device_block,
     NARRATIVE_DEVICE_FIELDS,
@@ -1679,6 +1685,31 @@ def _k1_violations(res):
     return []
 
 
+def _insert_paragraphs(text, adds):
+    """v2.17.1 — [{after, add}]를 원문 일치 문장 뒤 문단 끝에 끼워 넣는다. 끝 15%와 중복 자리는 건너뛴다."""
+    if not isinstance(adds, list):
+        return text, 0
+    tail = int(len(text) * 0.85)
+    plan = []
+    for a in adds:
+        if not isinstance(a, dict):
+            continue
+        anc, add = str(a.get("after") or "").strip(), str(a.get("add") or "").strip()
+        if len(anc) < 8 or len(add) < 40 or text.count(anc) != 1:
+            continue
+        pos = text.find(anc)
+        if pos >= tail:
+            continue
+        end = text.find("\n", pos + len(anc))
+        end = len(text) if end == -1 else end
+        if end >= tail or any(p == end for p, _ in plan):
+            continue
+        plan.append((end, add))
+    for end, add in sorted(plan, reverse=True):       # 뒤에서부터 넣어야 위치가 안 밀린다
+        text = text[:end] + "\n\n" + add + text[end:]
+    return text, len(plan)
+
+
 def fix_episode_pipeline(ep, rating, platform):
     """기준 미달 회차 보정: (필요 시) 재집필 → 설정 위반 문장 교정 → 무협 분량 보강 → 재판정.
 
@@ -1708,8 +1739,11 @@ def fix_episode_pipeline(ep, rating, platform):
         _push_version(ep, rating, f"보정 전 ({', '.join(fails)})")
         plen = PLATFORM_LENGTH.get(platform, {"min": 5000, "max": 6000})
 
-        # ① 구조 미달(M1·P1·C1·H1·A1·S1)은 재집필 1회
+        # ① 구조 미달(M1·P1·C1·H1·A1·S1)은 재집필 1회 — v2.17.1: 작가가 켠 경우만 (본문 전체 재출력, 비용 큼)
         struct = [f for f in fails if f not in ("L1", "K1", "R1", "X2")]
+        if struct and not S.get("fix_redo", False):
+            out["steps"].append(f"구조 미달 {', '.join(struct)} — 재집필 안 함 (작가 확인)")
+            struct = []
         if struct:
             new = call_claude_opus(
                 build_episode_redo_prompt(
@@ -1771,6 +1805,22 @@ def fix_episode_pipeline(ep, rating, platform):
 
         # ③ 분량이 모자라면 무협으로 보강 — 기존 문장·마지막 장면이 남았는지 코드가 확인
         if len(text) < plen["min"]:
+            # v2.17.1: 덧붙일 문단만 받아 코드가 끼워 넣는다 (본문 통째 재출력 없음)
+            adds = safe_json(call_claude_opus(
+                build_length_insert_prompt(text, ep, plen["min"], plen["max"], cc,
+                                           martial_bible=S.martial_bible,
+                                           episode_plots=S.episode_plots,
+                                           character_bible=S.character_bible,
+                                           continuity_block=_continuity_for(ep, rating)),
+                max_tokens=MAX_TOKENS_STRUCTURE,
+            ))
+            grown, n_add = _insert_paragraphs(text, adds)
+            if n_add and len(grown) > len(text):
+                out["steps"].append(f"무협 분량 보강 {len(text):,}→{len(grown):,}자 ({n_add}곳 삽입)")
+                text = grown
+            else:
+                out["steps"].append("분량 보강 — 붙일 자리를 찾지 못해 반려")
+        if False:   # v2.14.0 통째 재출력 방식 (보존용, 쓰지 않음)
             ext = call_claude_opus(
                 build_length_extend_prompt(text, ep, plen["min"], plen["max"], cc,
                                            martial_bible=S.martial_bible,
@@ -3658,8 +3708,10 @@ with tab3:
                     )
                 _b_skip = st.checkbox("이미 본문이 있는 회차는 건너뛴다", value=True, key="batch_skip")
                 _b_judge = st.checkbox("회차마다 📏 기준표 판정", value=True, key="batch_judge")
-                _b_fix = st.checkbox("기준 미달이면 🛠 보정 1회 (재집필·위반 문장 교정·무협 분량 보강)",
+                _b_fix = st.checkbox("기준 미달이면 🛠 보정 1회 (위반 문장 교정·무협 분량 보강)",
                                      value=True, key="batch_fix", disabled=not _b_judge)
+                st.checkbox("구조 미달(P1·M1·C2 등)은 본문 전체 재집필 — 비용 큼, 기본 끔", value=False, key="fix_redo",
+                            help="끄면 구조 미달은 표에만 남기고 작가가 직접 고칩니다. 문장 교정과 분량 보강은 고칠 곳만 손댑니다.")
                 _b_n = None if _b_count in ("끝까지", "끝 회차 지정") else int(_b_count.replace("화", ""))
                 _b_targets = [e for e in ep_options if e >= _b_start and (_b_end is None or e <= _b_end)]
                 if _b_skip:
@@ -3733,7 +3785,8 @@ with tab3:
                       if (_std_all.get(e) or {}).get("verdict") == "기준 미달"]
             with st.expander(f"🛠 기준 미달 보정 — 미달 {len(_under)}화", expanded=False):
                 st.caption(
-                    "미달 회차를 차례로 보정합니다: 구조 미달(M1·P1·C1·H1)은 재집필 1회 → 설정 위반(K1)은 "
+                    "v2.17.1 절약형: 구조 미달 재집필은 몰아쓰기 칸의 체크박스를 켰을 때만 합니다. "
+                    "미달 회차를 차례로 보정합니다: (구조 미달 재집필) → 설정 위반(K1)은 "
                     "판정관이 짚은 문장만 교정 → 분량 부족(L1)은 초식 시전 · 싸움 장면 · 세계관 설명으로 보강 "
                     "(기존 문장은 지우지 않음) → 분량 초과는 되풀이 서술·감상만 덜어 냄 → 다시 판정. 보정 전 원고는 회차별로 5개까지 남아 기준표 칸에서 "
                     "되돌릴 수 있습니다. 회차당 3~6분."
