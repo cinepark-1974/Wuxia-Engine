@@ -1,10 +1,11 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.10.0 — engine_validator.py
+👖 BLUE JEANS WUXIA ENGINE v2.17.0 — engine_validator.py
 ═══════════════════════════════════════════════════════════
 회차 자가 검수 · 재료 활용 검증 · 전환점 자동 감지 · 문체 정적 스캐너
 · 초식 일관성 정적 검사 · 장르 밀도 정적 검사
 
 [변경 이력]
+v2.17.0 (2026-11-22) — scan_meta_leaks()가 '1학년 A' · '이름 미정' 같은 이름 자리표시도 잡는다
 v2.10.0 (2026-11-07) — 서사 장치 연속성 · 출처 없는 인물 검출 · 인물명 오검출 수정
   · [사고 패턴 I 재발] scan_wuxia_density의 무공명 검출이 한자 병기 인명
     (김경수(金炅洙)·서아(徐雅) 등)을 무공으로 셌다. 아미고 EP002 실측 12종 중
@@ -3181,11 +3182,15 @@ _CLICHE_WATCH = ("아지랑이", "처음으로", "한 박자 늦게", "한 박�
                  "숨을 들이쉬고", "고개를 끄덕였다", "입꼬리가", "피식")
 
 
+_NAME_PH_RE = re.compile(r"(?:\d학년|신입생|상급생|학생|동기|부원|선도부원)\s?[A-Z](?![A-Za-z0-9]|반|조|동|팀|급)|이름\s*미정")
+
+
 def scan_meta_leaks(text: str) -> List[str]:
-    """본문 속 회차 번호 언급('2화의', '5화에서')과 마크다운 제목(#)."""
+    """본문 속 회차 번호 언급('2화의', '5화에서'), 마크다운 제목(#), 이름 자리표시('1학년 A', v2.17.0)."""
     out = [m.group(0) for m in _META_LEAK_RE.finditer(text or "")]
     if _HEADING_RE.search(text or ""):
         out.append("# 제목 기호")
+    out += [f"이름 자리표시 '{m.group(0)}'" for m in _NAME_PH_RE.finditer(text or "")]
     return out
 
 

@@ -1,9 +1,15 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.16.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.17.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.17.0 (2026-11-22) — 단역 이름 자동 부여
+  · _assign_minor_names() — 매 실행마다 Core·Extension Arc·회차 플롯에 남은 자리표시에 이름을 붙인다.
+    이미 붙인 이름은 그대로, 원고 본문은 건드리지 않는다. 회차 집필 때 플롯 생성 직후 한 번 더 확인
+  · 세션 키 minor_names(단역 이름표) — 백업 JSON에 저장
+  · STEP 3 🧾 연속성 대장 칸에 🏷 단역 이름표: 고쳐서 적용하면 설계 속 이름도 바뀐다 (같은 이름 중복 차단)
+  · 🛠 보정: 본문에 '1학년 A'가 남아 있으면 이름표로 바로 바꾸고, 이름표에 없는 자리표시는 그 문장만 교정
 v2.16.0 (2026-11-22) — Core Arc 구간 재설계 · 연재 드라마 규칙
   · STEP 2 Core Arc 탭 🔁 구간 재설계: 시작~끝 회차, 리뷰·작가 메모, 유지할 비트를 넣으면 그 구간만
     10화씩 다시 짠다. 구간 앞 5화와 뒤 2화를 함께 보여 이음매를 맞춤. 끊기면 이어서, 응답이 불완전하면 정지
@@ -496,6 +502,11 @@ from prompt import (
     build_ledger_extract_prompt,
     build_continuity_block,
     ledger_done_text,
+    find_name_placeholders,                # v2.17.0 — 단역 이름 자동 부여
+    generate_minor_names,
+    apply_minor_names,
+    parse_minor_names_text,
+    _fix_josa,
     build_narrative_devices_prompt,
     build_narrative_device_block,
     NARRATIVE_DEVICE_FIELDS,
@@ -1039,6 +1050,7 @@ defaults = {
     "core_arc_versions": [],      # v2.16.0 — 구간 재설계 전 Core Arc (최근 5개)
     "rev_active": None,           # v2.16.0 — 진행 중인 구간 재설계 (세션 전용)
     "canon_locks": "",            # v2.15.0 — 작가 설정 잠금 (최우선)
+    "minor_names": {},            # v2.17.0 — 단역 이름표 {"1학년 A": "변한결"}
     "ledger_active": None,        # v2.15.0 — 대장 일괄 생성 진행 (세션 전용)
     "extension_mode": "bridge",
     "extension_eps": 50,
@@ -1125,6 +1137,7 @@ PROJECT_KEYS = [
     "episode_versions", "fix_log",      # v2.14.0
     "continuity_ledger", "canon_locks", # v2.15.0
     "core_arc_versions",                # v2.16.0
+    "minor_names",                      # v2.17.0
     # v2.12.0: 기준표 판정 · 기준점 원고
     "standard_results", "benchmarks", "benchmark_results",
 ]
@@ -1434,7 +1447,65 @@ def _continuity_for(ep, rating):
     return build_continuity_block(
         _ledger(), ep, prev_ending=_prev_ending(ep, rating),
         locks=st.session_state.get("canon_locks") or "", overused=_overused(ep, rating),
+        minor_names=st.session_state.get("minor_names") or {},
     )
+
+
+def _assign_minor_names():
+    """v2.17.0 — 설계(Core·Extension Arc·회차 플롯)에 남은 '1학년 A' 같은 자리표시에 이름을 붙인다.
+
+    이름은 코드가 풀에서 고른다(주요 인물과 겹치지 않게). 이미 붙인 이름은 바꾸지 않는다.
+    회차 본문(원고)은 건드리지 않는다. 바뀐 것이 있으면 True.
+    """
+    S = st.session_state
+    targets = {"core_arc": S.get("core_arc") or [], "extension_arc": S.get("extension_arc") or [],
+               "episode_plots": S.get("episode_plots") or {}}
+    blob = json.dumps(targets, ensure_ascii=False)
+    ph = find_name_placeholders(blob)
+    if not ph:
+        return False
+    reg = dict(S.get("minor_names") or {})
+    title = (S.get("concept_card") or {}).get("title", "") if isinstance(S.get("concept_card"), dict) else ""
+    taken = _char_names() + re.findall(r"[가-힣]{2,4}(?=\s*[:：(])", S.get("canon_locks") or "")
+    new_reg = generate_minor_names(ph, taken, existing=reg, seed=title)
+    S.minor_names = new_reg
+    changed = False
+    for k, v in targets.items():
+        nv = apply_minor_names(v, new_reg)
+        if nv != v:
+            if k == "episode_plots":
+                S[k] = {int(e) if str(e).isdigit() else e: t for e, t in nv.items()}
+            else:
+                S[k] = nv
+            changed = True
+    return changed
+
+
+def _rename_minor(old_reg, new_reg):
+    """작가가 이름표를 고쳤을 때 — 설계 속 옛 이름을 새 이름으로 (원고는 그대로)."""
+    S = st.session_state
+    pairs = [(old_reg[k], v) for k, v in new_reg.items() if k in old_reg and old_reg[k] and old_reg[k] != v]
+    if not pairs:
+        return
+    def _sub(obj):
+        if isinstance(obj, str):
+            for a, b in pairs:
+                obj = _fix_josa(obj.replace(a, b), [b])
+            return obj
+        if isinstance(obj, list):
+            return [_sub(x) for x in obj]
+        if isinstance(obj, dict):
+            return {k: _sub(v) for k, v in obj.items()}
+        return obj
+    for k in ("core_arc", "extension_arc", "episode_plots"):
+        S[k] = _sub(S.get(k) or ([] if k != "episode_plots" else {}))
+
+
+# 매 실행마다 설계에 남은 자리표시를 확인한다 (없으면 바로 끝난다). 원고 본문은 건드리지 않는다.
+try:
+    _assign_minor_names()
+except Exception:
+    pass
 
 
 def _extract_ledger(ep, text):
@@ -1468,6 +1539,7 @@ def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=T
         # ① 플롯
         if ep not in S.episode_plots:
             ep_arc = next((e for e in target_arc if e.get("ep") == ep), {})
+            ep_arc = apply_minor_names(ep_arc, S.get("minor_names") or {})   # v2.17.0
             plant_map = S.plant_map_core if arc_source == "Core Arc" else S.plant_map_extension
             prev = ""
             for p in range(max(1, ep - 3), ep):
@@ -1498,6 +1570,7 @@ def write_episode_pipeline(ep, target_arc, arc_source, rating, platform, judge=T
                 res["error"] = "플롯 생성 실패 (2회)"
                 return res
             S.episode_plots[ep] = parsed
+        _assign_minor_names()       # v2.17.0 — 플롯에 새 자리표시가 생겼으면 본문 전에 이름을 붙인다
         # ② 본문
         text = ""
         for _try in range(2):
@@ -1657,8 +1730,24 @@ def fix_episode_pipeline(ep, rating, platform):
         vio = _k1_violations(res) if "K1" in (res.get("fail_ids") or []) else []
         # v2.15.0: 재소개·재시연(R1)과 회차 번호 노출(X2)도 같은 방식으로 그 문장만 고친다
         vio += [v for v in (res.get("r1_violations") or []) if isinstance(v, dict) and v.get("quote")]
+        # v2.17.0: 이름 자리표시('1학년 A')는 이름표로 코드가 바로 바꾼다 (보정 버튼을 눌렀을 때만)
+        _mn = S.get("minor_names") or {}
+        if _mn:
+            _t2 = apply_minor_names(text, _mn)
+            if _t2 != text:
+                text = _t2
+                out["steps"].append("이름 자리표시 → 단역 이름표")
         for lk in scan_meta_leaks(text):
             if lk.startswith("#"):
+                continue
+            if lk.startswith("이름 자리표시"):
+                _ph = lk.split("'")[1] if "'" in lk else lk
+                for sent in re.split(r"(?<=[.!?。])\s+", text):
+                    if _ph in sent:
+                        vio.append({"quote": sent.strip()[:120],
+                                    "conflicts_with": f"'{_ph}' 같은 자리표시를 본문에 쓰지 않는다 — 단역 이름표의 이름이나 "
+                                                      "'같은 반 여학생' 같은 묘사로 바꾼다"})
+                        break
                 continue
             for sent in re.split(r"(?<=[.!?。])\s+", text):
                 if lk in sent:
@@ -3476,6 +3565,24 @@ with tab3:
                         "- 지훈 시점에서 신유선 호칭은 '이사장님'.\n- 장웨이의 소림 첫 수업은 한 번만."
                     ),
                 )
+                # v2.17.0 — 단역 이름표
+                _mn = st.session_state.get("minor_names") or {}
+                if _mn:
+                    st.markdown("**🏷 단역 이름표** — 설계에 이름이 없던 단역에 엔진이 붙인 이름입니다. "
+                                "고쳐서 적용하면 설계 속 이름도 바뀝니다. 이미 쓴 원고는 바뀌지 않습니다.")
+                    _mn_txt = st.text_area("단역 이름표", value="\n".join(f"{k} = {v}" for k, v in _mn.items()),
+                                           height=110, key=f"minor_names_edit_{len(_mn)}",
+                                           label_visibility="collapsed")
+                    if st.button("🏷 이름표 적용", key="minor_names_apply"):
+                        _new = parse_minor_names_text(_mn_txt)
+                        _dups = [v for v in _new.values() if list(_new.values()).count(v) > 1]
+                        if _dups:
+                            st.error(f"같은 이름이 둘 이상 있습니다: {', '.join(sorted(set(_dups)))}")
+                        else:
+                            _rename_minor(_mn, _new)
+                            st.session_state.minor_names = {**_mn, **_new}
+                            st.success("이름표를 적용했습니다.")
+                            st.rerun()
                 _lc1, _lc2 = st.columns(2)
                 with _lc1:
                     _l_all = st.checkbox("이미 있는 대장도 다시 만든다", value=False, key="ledger_redo_all")

@@ -1,10 +1,20 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.16.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.17.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.17.0 (2026-11-22) — 단역 이름 자동 부여
+  · [작가 방향] "이름 없는 것은 자동으로 생성해. 중요한 인물이 아니라서 겹치지만 않으면 됨."
+  · 연재 드라마 규칙 7 변경: 이름 없는 단역은 '1학년 A'처럼 알파벳 자리표시로 적고, 엔진이 이름을 붙인다.
+    악역·주요 조력자는 여전히 기획서 이름만 쓴다 (원칙 M 유지)
+  · find_name_placeholders() — '1학년 A·B·C·D(이름 미정 — 작가 결정)' 같은 자리표시와 성별 단서를 찾는다
+  · generate_minor_names() — 이름 풀에서 코드가 고른다(LLM 아님). 기존 인물과 성·이름·이름 첫 글자가 겹치지 않고,
+    기존 이름이 통째로 들어간 이름('하은솔' 속 '하은')도 피한다. 작품 제목으로 순서를 정해 늘 같은 결과
+  · apply_minor_names() + _fix_josa() — 설계 속 자리표시를 이름으로 바꾸고 조사를 받침에 맞춘다
+  · build_continuity_block(minor_names=) — 플롯·본문·보강 프롬프트에 단역 이름표를 넣는다
+  · 기준표 X2: 본문 속 '1학년 A' 같은 이름 자리표시도 메타 노출로 잡는다
 v2.16.0 (2026-11-22) — Core Arc 연재 드라마 규칙 · 구간 재설계
   · CORE_ARC_DESIGN에 연재 드라마 규칙 8개 (리뷰 결함을 설계 단계에서 차단): 훅 이어받기, 한 사건 한 회차,
     큰 변곡 2화 안 후속, 5화마다 승리, 5화마다 악역의 실제 행동·엔딩 독점 금지, 모티프 강도 그래프,
@@ -352,7 +362,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.16.0"
+ENGINE_VERSION = "v2.17.0"
 ENGINE_BUILD_DATE = "2026-11-22"
 
 # ═══════════════════════════════════════════════════
@@ -4326,8 +4336,9 @@ CORE_ARC_DESIGN = """[Core Arc 완결형 설계 원칙]
 5. 악역은 5화마다 한 번 실제로 손을 쓴다 — 주인공 쪽이 실질적 손해를 본다. 지켜보기·웃기만으로 엔딩을 채우지 않는다.
    엔딩의 중심 인물을 한 사람에게 몰지 않는다(5화 중 3화 이상 금지).
 6. 핵심 모티프(기보·구슬·상징물)는 강도가 변하는 그래프로 쓴다. 변곡 회차에서 반응하고, 5화 이상 사라지지 않는다.
-7. 집단 구성원(정원·동기·팀)은 이름과 얼굴을 갖는다. 기획서에 이름이 없으면 지어내지 말고
-   "이름 미정 — 작가 결정"으로 표시한다.
+7. 집단 구성원(정원·동기·팀)은 이름과 얼굴을 갖는다. 기획서에 이름이 없는 단역은 이름을 지어내지 말고
+   "1학년 A", "1학년 B"처럼 알파벳 자리표시로 적는다 — 엔진이 겹치지 않는 이름을 자동으로 붙인다(v2.17.0).
+   악역·주요 조력자처럼 서사의 축인 인물은 자리표시로 두지 않고 기획서의 이름만 쓴다.
 8. 세계관 설명은 처음 나올 때 한 번. 같은 설명을 회차마다 되풀이하지 않는다.
 """
 
@@ -6935,7 +6946,7 @@ WUXIA_STANDARD_EPISODE = [
      "criterion": "이미 끝난 장면·자기소개·시연·설명(아래 연속성 대장)을 처음인 것처럼 다시 하는 문장이 없다 — v2.15.0"},
     {"id": "X2", "axis": "연재", "need": "필수", "check": "static", "applies": "always",
      "name": "메타 노출 없음",
-     "criterion": "본문 속 '2화의', '5화에서' 같은 회차 번호 언급·마크다운 기호(#)가 없다 — v2.15.0"},
+     "criterion": "본문 속 '2화의', '5화에서' 같은 회차 번호 언급·마크다운 기호(#)·'1학년 A' 같은 이름 자리표시가 없다 — v2.15.0/v2.17.0"},
     {"id": "X1", "axis": "서바이벌", "need": "권장", "check": "quote", "applies": "always",
      "name": "대가",
      "criterion": "이번 화에서 누군가 무언가를 잃거나 대가를 치른다 (부상·탈락·관계·자원·비밀)"},
@@ -7271,11 +7282,13 @@ def _ledger_items(ledger, upto_ep, key):
     return out
 
 
-def build_continuity_block(ledger, ep_number, prev_ending="", locks="", overused=None):
+def build_continuity_block(ledger, ep_number, prev_ending="", locks="", overused=None, minor_names=None):
     """누적 연속성 블록 — 플롯·본문·보강 프롬프트에 넣는다."""
     parts = ["## 🧾 연속성 대장 — 앞 회차와 이어지게 쓴다 (v2.15.0)"]
     if (locks or "").strip():
         parts += ["### 작가 설정 잠금 — 최우선, 바꾸지 말 것", locks.strip()]
+    if minor_names:
+        parts += [minor_names_block(minor_names)]
     if (prev_ending or "").strip():
         parts += [f"### 앞 화(EP{ep_number - 1}) 마지막 장면 원문 — 첫 장면은 이 직후를 이어받는다",
                   prev_ending.strip()]
@@ -7322,6 +7335,197 @@ def build_continuity_block(ledger, ep_number, prev_ending="", locks="", overused
         parts += ["### 반복 금지 표현 — 앞 회차에서 너무 자주 썼다 (이 화에서는 쓰지 않거나 한 번만)",
                   "- " + " / ".join(overused[:20])]
     return "\n".join(parts) if len(parts) > 1 else ""
+
+
+# ═══════════════════════════════════════════════════
+# v2.17.0 — 단역 이름 자동 부여
+# ───────────────────────────────────────────────────
+# [작가 방향] "이름 없는 것은 자동으로 생성해. 중요한 인물이 아니라서 겹치지만 않으면 됨."
+# 설계에 '1학년 A·B·C·D(이름 미정 — 작가 결정)'처럼 남은 자리표시를 엔진이 직접 채운다.
+# LLM에 맡기지 않는다 — 이름 풀에서 코드가 고르므로 같은 작품이면 늘 같은 이름이 나오고,
+# 주요 인물과 성·이름·이름 첫 글자가 겹치지 않는다. 이름표는 작가가 언제든 고칠 수 있다.
+# 악역·주요 조력자처럼 서사의 축인 인물은 여전히 원칙 M(지어내지 않음)을 따른다.
+
+_MINOR_SURNAMES = ("윤", "한", "오", "류", "서", "남", "허", "진", "도", "채", "변", "구",
+                   "엄", "방", "연", "명", "우", "표", "선", "기")
+_MINOR_GIVEN_F = ("채아", "보미", "가윤", "소율", "예린", "나경", "윤슬", "다솜", "혜원", "아영",
+                  "새봄", "규리", "미소", "로아", "은솔", "초롱", "여름", "태희", "라온", "효주")
+_MINOR_GIVEN_M = ("태오", "건우", "도윤", "승재", "현수", "우빈", "정민", "기찬", "범수", "재영",
+                  "동하", "영훈", "경택", "상우", "찬영", "인호", "주혁", "용진", "병찬", "석규")
+_MINOR_GIVEN_N = ("하람", "유진", "다온", "누리", "한결", "가람", "이안", "지안", "해솔")
+
+# '1학년 A', '1학년 A·B·C·D', '학생 A', '상급생 B' (+ 뒤의 '(이름 미정 — 작가 결정)')
+_PH_GROUP_RE = re.compile(
+    r"((?:\d학년|신입생|상급생|학생|동기|부원|선도부원|단원|제자|문도)\s?)"
+    r"([A-Z](?:\s?[·,/]\s?[A-Z])*)(?![A-Za-z0-9]|반|조|동|팀|급|등급|형|타입|구역|코스)"
+    r"(\s*\(\s*이름\s*미정[^)]*\))?"
+)
+_FEMALE_HINT = re.compile(r"여학생|여자|그녀|소녀|언니|누나|여자아이")
+_MALE_HINT = re.compile(r"남학생|남자|소년|형이|오빠|남자아이")
+
+
+def find_name_placeholders(text):
+    """본문·설계 문자열에서 자리표시 목록 — [('1학년 A', 'F'|'M'|'N'), ...] (등장 순서, 중복 없음)."""
+    order, votes = [], {}
+    for m in _PH_GROUP_RE.finditer(text or ""):
+        prefix = m.group(1).strip()
+        letters = re.findall(r"[A-Z]", m.group(2))
+        # 성별 단서는 한 명만 가리킬 때(묶음 아님) 앞 25자·뒤 15자에서만 본다
+        g = ""
+        if len(letters) == 1:
+            before = text[max(0, m.start() - 20):m.start()]
+            hits = [(h.end(), "F") for h in _FEMALE_HINT.finditer(before)]
+            hits += [(h.end(), "M") for h in _MALE_HINT.finditer(before)]
+            if hits:
+                g = max(hits)[1]            # 가장 가까운 단서
+            else:
+                after = text[m.end():m.end() + 12]
+                g = "F" if _FEMALE_HINT.search(after) else ("M" if _MALE_HINT.search(after) else "")
+        for letter in letters:
+            key = f"{prefix} {letter}"
+            if key not in votes:
+                votes[key] = {"F": 0, "M": 0}
+                order.append(key)
+            if g:
+                votes[key][g] += 1
+    out = []
+    for key in order:
+        v = votes[key]
+        out.append((key, "F" if v["F"] > v["M"] else ("M" if v["M"] > v["F"] else "N")))
+    return out
+
+
+def _name_parts(n):
+    n = re.sub(r"\s*\(.*?\)", "", n or "").strip()
+    if re.fullmatch(r"[가-힣]{3}", n):
+        return n[0], n[1:]
+    if re.fullmatch(r"(남궁|제갈|황보|선우|독고|사공)[가-힣]{1,2}", n):
+        return n[:2], n[2:]
+    if re.fullmatch(r"[가-힣]{2}", n):
+        return "", n
+    return "", ""
+
+
+def generate_minor_names(placeholders, taken_names, existing=None, seed=""):
+    """자리표시 → 이름. existing(이미 부여된 이름표)은 그대로 둔다.
+
+    겹침 기준: 이미 있는 인물과 (1) 성+이름 동일 (2) 이름 동일 (3) 이름 첫 글자 동일 (4) 성 동일
+    (5) 새 이름 안에 기존 이름이 통째로 들어 있음 — 모두 피한다.
+    seed(작품 제목)로 순서를 정하므로 같은 작품이면 같은 결과가 나온다.
+    """
+    import hashlib
+    reg = dict(existing or {})
+    used_full, used_given, used_first, used_sur = set(), set(), set(), set()
+    for n in list(taken_names or []) + list(reg.values()):
+        sur, given = _name_parts(n)
+        if given:
+            used_full.add(sur + given)
+            used_given.add(given)
+            used_first.add(given[0])
+        if sur:
+            used_sur.add(sur)
+        elif given:
+            used_sur.add(given[0])      # '서아' 같은 두 글자 이름의 첫 글자도 성으로 쓰지 않는다
+
+    def order(pool, salt):
+        return sorted(pool, key=lambda x: hashlib.md5(f"{seed}|{salt}|{x}".encode()).hexdigest())
+
+    for key, g in placeholders:
+        if key in reg:
+            continue
+        pool = {"F": _MINOR_GIVEN_F, "M": _MINOR_GIVEN_M}.get(g, _MINOR_GIVEN_N + _MINOR_GIVEN_F[:6])
+        name = ""
+        for strict in (True, False):
+            for given in order(pool, key + "g"):
+                if given in used_given or (strict and given[0] in used_first):
+                    continue
+                for sur in order(_MINOR_SURNAMES, key + "s"):
+                    if (strict and sur in used_sur) or (sur + given) in used_full:
+                        continue
+                    if any(len(u) >= 2 and u in (sur + given) for u in used_given):
+                        continue        # '하은솔' 속 '하은'처럼 기존 이름이 들어 있으면 버린다
+                    name = sur + given
+                    break
+                if name:
+                    break
+            if name:
+                break
+        if not name:
+            continue
+        reg[key] = name
+        used_full.add(name)
+        used_given.add(name[1:])
+        used_first.add(name[1])
+        used_sur.add(name[0])
+    return reg
+
+
+def _has_batchim(ch):
+    o = ord(ch) - 0xAC00
+    return 0 <= o <= 11171 and o % 28 != 0
+
+
+def _is_rieul(ch):
+    o = ord(ch) - 0xAC00
+    return 0 <= o <= 11171 and o % 28 == 8
+
+
+def _fix_josa(text, names):
+    """이름 뒤 조사를 받침에 맞춘다 — '변한결를' → '변한결을', '엄은솔가' → '엄은솔이'."""
+    for n in names:
+        if not n:
+            continue
+        b, r = _has_batchim(n[-1]), _is_rieul(n[-1])
+        def fix(m, b=b, r=r):
+            j = m.group(2)
+            pair = {"을": ("을", "를"), "를": ("을", "를"), "은": ("은", "는"), "는": ("은", "는"),
+                    "과": ("과", "와"), "와": ("과", "와"), "이": ("이", "가"), "가": ("이", "가")}
+            if j in ("으로", "로"):
+                return m.group(1) + ("로" if (not b or r) else "으로")
+            a, c = pair[j]
+            return m.group(1) + (a if b else c)
+        text = re.sub(rf"({re.escape(n)})(으로|로|을|를|은|는|과|와)(?=[\s.,!?…'\"”’)]|$)", fix, text)
+        text = re.sub(rf"({re.escape(n)})(이|가)(?=[\s.,!?…'\"”’)]|$)", fix, text)
+    return text
+
+
+def apply_minor_names(obj, registry):
+    """설계 데이터(문자열·리스트·딕셔너리)의 자리표시를 이름으로 바꾼다. 회차 본문에는 쓰지 않는다."""
+    if not registry:
+        return obj
+    if isinstance(obj, str):
+        def _sub(m):
+            prefix = m.group(1).strip()
+            letters = re.findall(r"[A-Z]", m.group(2))
+            names = [registry.get(f"{prefix} {L}") for L in letters]
+            if not all(names):
+                return m.group(0)
+            return f"{prefix} " + "·".join(names)
+        return _fix_josa(_PH_GROUP_RE.sub(_sub, obj), registry.values())
+    if isinstance(obj, list):
+        return [apply_minor_names(x, registry) for x in obj]
+    if isinstance(obj, dict):
+        return {k: apply_minor_names(v, registry) for k, v in obj.items()}
+    return obj
+
+
+def parse_minor_names_text(text):
+    """작가가 고친 이름표 — '1학년 A = 윤채아' 줄 단위."""
+    reg = {}
+    for line in (text or "").splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            k, v = k.strip(" -·\t"), v.strip()
+            if k and v:
+                reg[k] = v
+    return reg
+
+
+def minor_names_block(registry):
+    if not registry:
+        return ""
+    return "\n".join(["### 단역 이름표 — 엔진이 붙인 이름 (이 이름 그대로 쓴다. 'A·B' 같은 자리표시를 본문에 쓰지 않는다)",
+                      *[f"- {k}: {v}" for k, v in registry.items()]])
 
 
 def ledger_done_text(ledger, ep_number):
