@@ -181,3 +181,27 @@ def parse_brief(uploaded_file):
         return parse_txt(file_bytes)
     else:
         return f"[지원하지 않는 파일 형식: {filename}]"
+
+
+# v2.19.0 — 여러 회차가 든 원고(DOCX·TXT)를 회차별로 나눈다.
+#   본문 제목 'EP12. 제목' 또는 '제12화'/'12화' 줄을 기준으로 자른다.
+#   목차 줄('EP012   EP12. 제목')은 'EP012' 뒤에 마침표가 없어 제목으로 보지 않는다. 첫 제목 앞(표지)은 버린다.
+import re as _re
+_EP_HEAD = _re.compile(r"^\s*(?:EP\s*(\d+)\.\s+\S|제?\s*(\d+)\s*화(?:\s|$|[.:·]))")
+
+
+def split_episodes(text):
+    """원고 텍스트 → {회차번호: 본문}. 같은 회차가 두 번 나오면 먼저 나온 것을 쓴다."""
+    out, cur, buf = {}, None, []
+    for line in (text or "").splitlines():
+        m = _EP_HEAD.match(line)
+        if m and len(line.strip()) <= 60:
+            if cur is not None and cur not in out and "\n".join(buf).strip():
+                out[cur] = "\n".join(buf).strip()
+            cur, buf = int(m.group(1) or m.group(2)), []
+            continue
+        if cur is not None:
+            buf.append(line)
+    if cur is not None and cur not in out and "\n".join(buf).strip():
+        out[cur] = "\n".join(buf).strip()
+    return out

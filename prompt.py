@@ -1,10 +1,20 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.18.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.19.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.19.0 (2026-11-22) — 작가 검토 반영: 상태 장부 · 세계관 사전 · AI 말투 차단
+  · [작가 요청] 「아미고」 EP1~15 검토에서 반복된 문제(연속성·설정·문체·비문·구조)를 엔진에서 차단
+  · A1·A3·B2·E1·E2 대장 확장: end_state(장소·때·자세·상황) · day · props(부상·소지품) · key_lines(주요 대사 원문)
+    · firsts('처음' 비트) · techniques_explained · present · clues_noticed · protagonist_outcome · speech.trigger
+  · ledger_state_text() — 앞 화 끝 상태·최신 소지품·대사 기록·'처음'·해설한 기술·알아챈 단서를 집필과 판정관에 같이 준다
+  · build_glossary_draft() — 대장에서 세계관 사전 초안(정의가 흔들린 항목 ⚠, 호칭, @상징 줄). 작가 확정본만 집필에 주입
+  · WUXIA_STYLE_RULES — 집필 프롬프트에 연속성·문체 규칙 (예고 금지, 회상은 기록만, 해설 문단 금지, 어휘·리듬 상한)
+  · 기준표: T1 AI 말투 상한(필수, 코드 판정) · T2 어휘 반복(권장) · Q1 상태·회상 정합(필수) · D1 비문·논리(필수)
+  · 분량 보강 프롬프트: 서술자 해설로 채우지 않는다 — 싸움 합 → 초식 동작 → 대사로 드러내는 세계관 순
+  · Core Arc 연재 드라마 규칙 9~11: 5~7화 안 명확한 승리·좌절 3연속 금지, 악역 압박의 pressure_logic, 상징 반응 조건
 v2.18.0 (2026-11-22) — 작업 현황판 (main.py, 룰 변경 없음)
 v2.17.1 (2026-11-22) — 보정 절약형 (본문 통째 재출력 없애기)
   · [작가 지적] "다시쓰기하면서 낭비하는 게 아닐까? 수정된 부분만 정리할 수는 없나?"
@@ -367,7 +377,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.18.0"
+ENGINE_VERSION = "v2.19.0"
 ENGINE_BUILD_DATE = "2026-11-22"
 
 # ═══════════════════════════════════════════════════
@@ -4345,6 +4355,14 @@ CORE_ARC_DESIGN = """[Core Arc 완결형 설계 원칙]
    "1학년 A", "1학년 B"처럼 알파벳 자리표시로 적는다 — 엔진이 겹치지 않는 이름을 자동으로 붙인다(v2.17.0).
    악역·주요 조력자처럼 서사의 축인 인물은 자리표시로 두지 않고 기획서의 이름만 쓴다.
 8. 세계관 설명은 처음 나올 때 한 번. 같은 설명을 회차마다 되풀이하지 않는다.
+9. 통쾌한 장면 배분 (v2.19.0): 5~7화 안에 주인공의 명확한 승리 비트를 1회 이상 넣는다.
+   좌절(win_or_loss '패')이 3화 연속 이어지지 않게 한다. 승리는 세계관 규칙 안에서 성립해야 한다
+   (예: 예선 규칙상 탈락은 아니지만 상대가 선을 밟게 만든다).
+10. 악역 압박 장치의 논리 (v2.19.0): 협박·함정·제재마다 "누가, 어떤 손해를, 왜 입는가"를 pressure_logic에 한 줄로 적고,
+   원고 안에서 인물이 그 논리를 말하게 한다. 논리가 성립하지 않는 압박(예: 교사가 감독한 수업 영상으로
+   학생 개인을 협박 — 감사에서는 학교 안전 관리 문제가 된다)은 쓰지 않는다.
+11. 상징 오브젝트는 반응 조건을 먼저 정한다 (v2.19.0): 예) 구슬은 물리적 타격을 흡수할 때만 반응.
+   감정(질투·그리움)에 반응하는 기분 표시기로 쓰지 않는다. 회차당 1~2회.
 """
 
 
@@ -4971,6 +4989,7 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
     "picks_up": "앞 화 클리프행어를 이 화 첫 장면에서 어떻게 이어받나 (EP1은 \"\")",
     "win_or_loss": "승 / 패 / 없음 — 주인공 기준",
     "antagonist_move": "악역이 이 화에서 실제로 한 행동 (없으면 \"\")",
+    "pressure_logic": "악역 압박 장치가 있으면 '누가 어떤 손해를 왜' 한 줄 (없으면 \"\")",
     "plant_seeds": ["이 화에서 배치하는 떡밥"],
     "payoff_recall": ["이 화에서 회수하는 떡밥"]
   }},
@@ -6952,6 +6971,23 @@ WUXIA_STANDARD_EPISODE = [
     {"id": "X2", "axis": "연재", "need": "필수", "check": "static", "applies": "always",
      "name": "메타 노출 없음",
      "criterion": "본문 속 '2화의', '5화에서' 같은 회차 번호 언급·마크다운 기호(#)·'1학년 A' 같은 이름 자리표시가 없다 — v2.15.0/v2.17.0"},
+    {"id": "T1", "axis": "문체", "need": "필수", "check": "static", "applies": "always",
+     "name": "AI 말투 상한",
+     "criterion": "서술자 결론('~가 아니라 ~였다' 2회·'~라는 뜻이었다' 1회·'그게 전부였다'류 1회), "
+                  "서술자 예고('~할 것이다') 0회, 현재형 해설 문단 0회, 장면·문단 끝 단문 3연속 1회, "
+                  "상징 오브젝트 반응(세계관 사전 @상징 상한) 이하 — v2.19.0"},
+    {"id": "Q1", "axis": "연재", "need": "필수", "check": "violation", "applies": "ledger",
+     "name": "상태·회상 정합",
+     "criterion": "앞 화 끝 상태(위치·시각·자세·부상·소지품)와 모순되는 문장, 기록에 없는 장면·대사를 회상하거나 "
+                  "화자·장소를 바꿔 기억하는 문장, 이미 쓴 '처음' 비트를 다시 처음처럼 쓰는 문장, "
+                  "이미 해설한 기술을 다시 해설하는 문장, 이유 없이 말투·호칭이 바뀌는 문장이 없다 — v2.19.0"},
+    {"id": "D1", "axis": "문장", "need": "필수", "check": "violation", "applies": "always",
+     "name": "비문·논리",
+     "criterion": "주술 호응이 깨진 문장, 어색한 연어, '꿰어졌다/이어졌다' 뒤 서로 무관한 나열, "
+                  "앞 문장에서 이어지지 않는 논리 점프가 없다 (명백한 것만) — v2.19.0"},
+    {"id": "T2", "axis": "문체", "need": "권장", "check": "static", "applies": "always",
+     "name": "어휘 반복 상한",
+     "criterion": "'처음' 1회, 비유('~처럼/~것 같았다/~듯') 5회, 문장 첫머리 '대신/다만' 4회 이하 — v2.19.0"},
     {"id": "X1", "axis": "서바이벌", "need": "권장", "check": "quote", "applies": "always",
      "name": "대가",
      "criterion": "이번 화에서 누군가 무언가를 잃거나 대가를 치른다 (부상·탈락·관계·자원·비밀)"},
@@ -7038,6 +7074,35 @@ def standard_items_for(concept_card=None, has_plot=True, has_prev_hook=False, ha
     return out
 
 
+# ═══════════════════════════════════════════════════
+# v2.19.0 — 집필 문체·연속성 규칙 (작가 검토: 아미고 EP1~15에서 회차마다 반복된 문제)
+# ═══════════════════════════════════════════════════
+WUXIA_STYLE_RULES = """## ✍ 집필 규칙 — 작가 검토에서 반복 지적된 것 (v2.19.0, 기준표 T1·T2·Q1·D1로 점검)
+[연속성]
+- 첫 장면은 앞 화 끝 상태(위치·시각·자세·부상·소지품)에서 그대로 시작한다. 앞 화에서 닿은 봉 끝은 '닿기도 전에' 멈추지 않는다.
+  부서진 물건·다친 몸은 장부의 최신 상태대로 쓴다 (조각난 안경을 다음 화에 '금 간 안경'으로 쓰지 않는다).
+- 앞 화가 걸어 둔 훅은 이번 화에서 장면으로 처리한다. '싱겁게 지나갔다' 같은 한 문단 요약 금지.
+  미루려면 미루는 이유가 장면 안에 있어야 한다.
+- 서술자가 다음 화를 예고하지 않는다: '~할 것이다', '~하게 될 것이다' 금지. 지금 장면으로 끝낸다.
+- 회상·인용("그때 ~라고 했다")은 장부의 주요 대사 기록에 있는 것만, 그 화자·장소 그대로 쓴다. 기록에 없으면 회상하지 않는다.
+- 이미 서술된 사건(시연·대련·자기소개·이름 쓰기)은 다시 서술하지 않는다. 한 줄 상기만 허용.
+- '처음' 비트(처음 반말, 처음 이름 부르기, 처음 공격)는 작품 전체에서 한 번. 장부에 있으면 다시 '처음'으로 쓰지 않는다.
+- 말투·호칭은 장부 관계표대로. 바꾸려면 장면 안에 계기(대사·사건)를 보여 준다. 호칭은 하나로 고정한다.
+- 무공·무기·고유명사 정의와 한자 표기는 세계관 사전대로. 사전과 다른 정의를 새로 쓰지 않는다.
+[문체]
+- 서술자가 의미를 정리하지 않는다: '~가 아니라 ~였다' 대조 2회, '~라는 뜻이었다' 1회, '그게 전부였다/그뿐이었다' 1회 이하.
+  아포리즘('별것 아닌 말 하나로 하루를 버티기도 한다')은 회차당 최대 1회.
+- 무공 해설 문단 금지: 현재형 해설(정의 → 장점 → '대신/다만' 약점) 문단을 쓰지 않는다.
+  원리와 약점은 ① 인물 대사(설명 캐릭터의 수다, 교사의 지적) ② 장면 속 실패(천장에 걸리는 봉, 엉키는 아미자)
+  ③ 전투 결과(약점을 찔려 지는 장면) 중 하나로만. 같은 기술의 해설은 작품 전체에서 한 번 — 장부에 있으면 설명 없이 쓴다.
+- 어휘 상한: '처음' 1회, 비유('~처럼/~것 같았다/~듯') 5회, 문장 첫머리 '대신/다만' 4회.
+  세계관 정보(정원 수·예산·학교 서열)는 최초 1회만 설명하고, 이후에는 인물의 행동·대사로 1회 이하.
+- 장면·문단을 13자 안팎 단문 3연속으로 끝내는 리듬은 회차당 1회 이하.
+- 상징 오브젝트는 세계관 사전의 반응 조건에서만 반응시킨다(감정 표시기로 쓰지 않는다). 회차당 상한을 지킨다.
+- 비문 점검: 주술 호응, 자연스러운 연어, '꿰어졌다/이어졌다' 뒤 나열 항목의 실제 연관, 논리 점프 없이 이어지는지.
+"""
+
+
 def build_standard_write_block(concept_card=None, ep_number=0, platform="문피아"):
     """집필 프롬프트용 — 이 회차가 점검받을 기준을 미리 알린다."""
     plen = get_platform_length(platform)
@@ -7050,7 +7115,7 @@ def build_standard_write_block(concept_card=None, ep_number=0, platform="문피�
         elif it["id"] == "H2":
             crit = f"괄호 한자 병기 {standard_hanja_limit(concept_card, ep_number)}회 이하 (A29 하한도 함께 지킬 것)"
         lines.append(f"- [{it['need']}] {it['id']} {it['name']}: {crit}")
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n\n" + WUXIA_STYLE_RULES
 
 
 def build_planning_standard_block(concept_card=None):
@@ -7068,7 +7133,7 @@ def build_planning_standard_block(concept_card=None):
 
 def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
                                 episode_plot=None, canon_text="", budget=24000,
-                                prev_hook="", done_text=""):
+                                prev_hook="", done_text="", state_text=""):
     """판정관 프롬프트 — 집필(Opus)과 분리된 Sonnet이 근거 문장만 뽑는다.
 
     판정(충족/미달)은 이 응답으로 하지 않는다. 코드가 인용을 본문과 대조해 판정한다.
@@ -7082,6 +7147,8 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
                   if prev_hook else "")
     done_block = (f"\n## 연속성 대장 — 이미 끝난 장면·소개·시연·설명 (R1 — 이것을 처음처럼 다시 하는 본문 문장)\n"
                   f"{done_text[:5000]}\n" if done_text else "")
+    state_block = (f"\n## 상태 장부 — 앞 화 끝 상태·주요 대사 기록·'처음' 비트·해설한 기술·말투 (Q1 — 이것과 모순되는 본문 문장)\n"
+                   f"{state_text[:6000]}\n" if state_text else "")
     item_lines = "\n".join(f"- {it['id']} {it['name']}: {it['criterion']}" for it in items)
     scene_lines = "\n".join(
         f"- 씬 {sc.get('scene_no', i + 1)}: {str(sc.get('beat') or '')} — {str(sc.get('action') or '')[:220]}"
@@ -7107,7 +7174,7 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
 ## 작가 확정 사항 · 채택표 · 세계관 (K1 — 이것과 어긋나는 본문 문장)
 {canon}
 
-{prev_block}{done_block}
+{prev_block}{done_block}{state_block}
 ## EP{ep_number} 본문
 {body}
 
@@ -7119,9 +7186,12 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
   }},
   "P1": [{{"scene_no": 1, "quote": ""}}],
   "K1": [{{"quote": "", "conflicts_with": "어긋나는 확정 사항 한 줄"}}],
-  "R1": [{{"quote": "", "conflicts_with": "이미 나온 장면·소개 한 줄"}}]
+  "R1": [{{"quote": "", "conflicts_with": "이미 나온 장면·소개 한 줄"}}],
+  "Q1": [{{"quote": "", "conflicts_with": "모순되는 장부 기록 한 줄 (예: EP3 끝 봉 끝이 가슴뼈에 닿음)"}}],
+  "D1": [{{"quote": "", "conflicts_with": "무엇이 틀렸나 (주술 호응·연어·나열 비약·논리 점프)"}}]
 }}
-items에는 위 기준 중 P1·K1·R1을 뺀 모든 번호를 넣는다. R1 대장이 없으면 R1은 빈 목록.
+items에는 위 기준 중 P1·K1·R1·Q1·D1을 뺀 모든 번호를 넣는다. R1·Q1 장부가 없으면 빈 목록.
+D1은 명백한 비문만 고른다 — 문체 취향은 고르지 않는다. 최대 6개.
 JSON 외 텍스트 금지. 코드 블록 금지."""
 
 
@@ -7154,11 +7224,11 @@ def build_length_extend_prompt(episode_text, ep_number, target_min, target_max,
 
 ## 보강 방법 — 무협으로 채운다 (대사·감상·회상으로 늘리지 않는다)
 1. 초식 시전: 본문에 이미 나온 초식을 펼치는 자리에서 이름 · 몸의 동작 · 눈에 보이는 결과를
-   한 장면으로 보여 주고, 그 초식의 원리 · 장점 · 약점을 서술자가 짧게 풀어 준다.
+   한 장면으로 보여 준다. 원리·약점은 서술자 해설로 풀지 않는다 — 인물 대사, 장면 속 실패, 전투 결과로만 (v2.19.0 C2).
 2. 싸움 장면: 이미 있는 대결·대치 장면 안에서 합(공격과 방어)을 두세 번 더 주고받게 한다.
    힘의 차이, 거리, 호흡, 발놀림, 무기와 지형이 보이게 쓴다.
-3. 세계관 설명: 장소·학교·세력·제도가 처음 나오는 자리에서 아래 세계관 바이블과 작가 확정 사항에
-   **이미 적힌 내용만** 서술로 풀어 준다. 단, 아래 '이미 설명한 세계관'에 있는 항목은 다시 설명하지 않는다
+3. 세계관: 장소·학교·세력·제도가 처음 나오는 자리에서 아래 세계관 바이블과 작가 확정 사항에
+   **이미 적힌 내용만** 인물의 대사나 행동으로 드러낸다 (서술자 설명 문단 금지 — v2.19.0). 단, 아래 '이미 설명한 세계관'에 있는 항목은 다시 설명하지 않는다
    (앞 화에서 설명한 것을 되풀이하면 반복이 된다 — v2.15.0).
 
 ## 지켜야 할 것
@@ -7204,11 +7274,14 @@ def build_length_insert_prompt(episode_text, ep_number, target_min, target_max,
 본문을 다시 쓰지 말고, **덧붙일 문단만** 만들어 합계 약 {need:,}자를 보강하세요.
 
 ## 보강 방법 — 무협으로 채운다 (대사·감상·회상으로 늘리지 않는다)
-1. 초식 시전: 본문에 이미 나온 초식을 펼치는 자리 뒤에 이름 · 몸의 동작 · 눈에 보이는 결과와
-   그 초식의 원리 · 장점 · 약점을 짧게 풀어 준다.
-2. 싸움 장면: 이미 있는 대결·대치 장면 안에서 합(공격과 방어)을 두세 번 더 주고받게 한다.
-3. 세계관 설명: 장소·제도가 처음 나오는 자리 뒤에 아래 세계관 바이블에 **이미 적힌 내용만** 풀어 준다.
-   아래 '이미 설명한 세계관'에 있는 항목은 다시 설명하지 않는다.
+1. 싸움 장면: 이미 있는 대결·대치 장면 안에서 합(공격과 방어)을 두세 번 더 주고받게 한다.
+   거리·호흡·발놀림·무기와 지형이 보이게 쓴다. (1순위)
+2. 초식 시전: 본문에 이미 나온 초식을 펼치는 자리 뒤에 이름 · 몸의 동작 · 눈에 보이는 결과를 덧붙인다.
+   원리·약점은 서술자 해설로 풀지 않는다 — 인물 대사(교사의 지적, 동료의 말), 장면 속 실패, 전투 결과로만.
+   아래 '이미 해설한 기술'은 다시 설명하지 않고 그냥 쓴다. (v2.19.0 C2)
+3. 세계관: 장소·제도가 처음 나오는 자리 뒤에 아래 세계관 바이블에 **이미 적힌 내용만** 인물의 대사나 행동으로 드러낸다.
+   아래 '이미 설명한 세계관'에 있는 항목은 다시 꺼내지 않는다.
+- 덧붙이는 문단에도 아래 문체 규칙(서술자 결론·비유·'처음'·단문 3연속 상한)을 지킨다.
 
 ## 지켜야 할 것
 - after에는 본문에 있는 문장 하나를 **한 글자도 바꾸지 말고** 그대로 복사한다 (그 문장 뒤에 덧붙는다).
@@ -7316,15 +7389,25 @@ def build_ledger_extract_prompt(episode_text, ep_number):
   "hooks_opened": [{{"hook": "이 화가 걸어 둔 약속·위협·예고 (예: 내일 새벽 7시 본관 앞)", "next": "다음에 벌어져야 할 일"}}],
   "hooks_closed": ["이 화에서 회수한 이전 회차의 약속·위협"],
   "facts": [{{"subject": "무기·초식·제도·관계·'처음' 사건 이름", "fact": "본문이 정한 정의·사실"}}],
-  "speech": [{{"pair": "말하는 사람→듣는 사람", "level": "반말 또는 존댓말"}}],
+  "speech": [{{"pair": "말하는 사람→듣는 사람", "level": "반말 또는 존댓말", "trigger": "이 화에서 바뀌었다면 바뀐 계기 (아니면 \"\")"}}],
   "titles": [{{"speaker": "", "target": "", "title": "부르는 호칭"}}],
   "world_explained": ["서술로 설명한 세계관 항목 (학교 제도·대회·세력 등)"],
   "ending_owner": "마지막 장면의 중심 인물",
   "protagonist_win": false,
   "antagonist_action": "악역이 실제로 한 행동 (지켜보거나 웃기만 했으면 빈 문자열)",
-  "motifs": ["이 화에 나온 반복 모티프 (구슬·교복 등)"]
+  "motifs": ["이 화에 나온 반복 모티프 (구슬·교복 등)"],
+  "end_state": {{"place": "마지막 장면 장소", "time": "시각·때", "posture": "중심 인물들의 자세·위치 (예: 봉 끝이 지훈의 가슴뼈에 닿아 있음)", "situation": "끝나는 순간의 상황 한 줄"}},
+  "day": "작중 날짜 경과 (예: 입학 3일째 밤)",
+  "props": [{{"who": "인물", "item": "부상·소지품·소품", "state": "지금 상태 (예: 렌즈가 조각나 주머니에 넣음)"}}],
+  "key_lines": [{{"speaker": "화자", "line": "원문 그대로의 주요 대사", "place": "장소"}}],
+  "firsts": ["이 화에서 일어난 '처음' 비트 (예: 지훈→시호 처음 반말, 지훈 처음 공격)"],
+  "techniques_explained": ["원리·약점을 설명한 무공·기술 이름"],
+  "present": ["이 화에 등장한 이름 있는 인물"],
+  "clues_noticed": [{{"clue": "떡밥·단서", "noticed_by": "알아챈 인물"}}],
+  "protagonist_outcome": "승리 / 좌절 / 진행 — 주인공 기준"
 }}
 JSON 외 텍스트 금지. 코드 블록 금지.
+key_lines는 회상·인용에 쓸 중요한 대사만 3~6개, 원문 그대로.
 
 ## EP{ep_number} 본문
 {(episode_text or "")[:24000]}"""
@@ -7338,13 +7421,23 @@ def _ledger_items(ledger, upto_ep, key):
     return out
 
 
-def build_continuity_block(ledger, ep_number, prev_ending="", locks="", overused=None, minor_names=None):
+def build_continuity_block(ledger, ep_number, prev_ending="", locks="", overused=None, minor_names=None,
+                           glossary="", roster_gaps=None):
     """누적 연속성 블록 — 플롯·본문·보강 프롬프트에 넣는다."""
     parts = ["## 🧾 연속성 대장 — 앞 회차와 이어지게 쓴다 (v2.15.0)"]
     if (locks or "").strip():
         parts += ["### 작가 설정 잠금 — 최우선, 바꾸지 말 것", locks.strip()]
+    if (glossary or "").strip():
+        parts += ["### 📚 세계관 사전 — 무공·무기·고유명사 정의와 한자 표기, 상징 오브젝트 반응 조건 (이대로만 쓴다)",
+                  glossary.strip()[:6000]]
     if minor_names:
         parts += [minor_names_block(minor_names)]
+    st_txt = ledger_state_text(ledger, ep_number, for_writer=True)
+    if st_txt:
+        parts += [st_txt]
+    if roster_gaps:
+        parts += ["### 오래 안 나온 이름 있는 인물 — 이번 화나 다음 화에 자리를 만든다 (E1)",
+                  "- " + " / ".join(f"{n} (EP{e} 이후)" for n, e in roster_gaps[:10])]
     if (prev_ending or "").strip():
         parts += [f"### 앞 화(EP{ep_number - 1}) 마지막 장면 원문 — 첫 장면은 이 직후를 이어받는다",
                   prev_ending.strip()]
@@ -7584,6 +7677,105 @@ def minor_names_block(registry):
                       *[f"- {k}: {v}" for k, v in registry.items()]])
 
 
+def ledger_state_text(ledger, ep_number, for_writer=False):
+    """v2.19.0 상태 장부 — 앞 화 끝 상태·날짜·소지품/부상 최신·주요 대사 기록·'처음' 비트·해설한 기술·알아챈 단서.
+
+    집필(for_writer=True)과 판정관 Q1이 같은 내용을 본다.
+    """
+    lg = ledger or {}
+    eps = sorted(int(k) for k in lg if str(k).isdigit() and int(k) < ep_number)
+    if not eps:
+        return ""
+    L = lambda e: lg.get(e) or lg.get(str(e)) or {}
+    parts = []
+    last = L(eps[-1])
+    es = last.get("end_state") if isinstance(last.get("end_state"), dict) else {}
+    if es or last.get("day"):
+        parts += [f"### 앞 화(EP{eps[-1]}) 끝 상태 — 첫 장면은 여기서 그대로 시작한다",
+                  f"- 장소: {es.get('place', '')} / 때: {es.get('time', '')} / 날짜: {last.get('day', '')}",
+                  f"- 자세·위치: {es.get('posture', '')}", f"- 상황: {es.get('situation', '')}"]
+    props = {}
+    for e in eps:
+        for p in (L(e).get("props") or []):
+            if isinstance(p, dict) and p.get("who") and p.get("item"):
+                props[f"{p['who']}·{p['item']}"] = (e, p.get("state", ""))
+    if props:
+        parts += ["### 인물별 부상·소지품 최신 상태 — 이 상태대로 쓴다",
+                  *[f"- {k}: {v} (EP{e})" for k, (e, v) in list(props.items())[-25:]]]
+    lines = []
+    for e in eps:
+        for k in (L(e).get("key_lines") or []):
+            if isinstance(k, dict) and k.get("line"):
+                lines.append(f"- (EP{e}) {k.get('speaker', '?')} @{k.get('place', '')}: \"{k['line']}\"")
+    if lines:
+        parts += ["### 주요 대사 기록 — 회상·인용은 여기 있는 것만, 화자·장소 그대로", *lines[-40:]]
+    firsts = [f"(EP{e}) {x}" for e in eps for x in (L(e).get("firsts") or [])]
+    if firsts:
+        parts += ["### 이미 쓴 '처음' 비트 — 다시 '처음'으로 쓰지 않는다", "- " + " / ".join(firsts[-40:])]
+    tech = []
+    for e in eps:
+        for x in (L(e).get("techniques_explained") or []):
+            if x not in tech:
+                tech.append(x)
+    if tech:
+        parts += ["### 이미 해설한 기술 — 다시 설명하지 않고 그냥 쓴다", "- " + " / ".join(tech[:40])]
+    clues = []
+    for e in eps:
+        for c in (L(e).get("clues_noticed") or []):
+            if isinstance(c, dict) and c.get("clue"):
+                clues.append(f"- (EP{e}) {c['clue']} — 알아챈 사람: {c.get('noticed_by', '')}")
+    if clues:
+        parts += ["### 알아챈 단서 — 그 인물이 다시 나오거나 관련 소품이 나오면 반응 비트를 넣는다", *clues[-15:]]
+    if not for_writer:
+        sp = {}
+        for e in eps:
+            for x in (L(e).get("speech") or []):
+                if isinstance(x, dict) and x.get("pair"):
+                    sp[x["pair"]] = (e, x.get("level", ""), x.get("trigger", ""))
+        if sp:
+            parts += ["### 말투 관계표", *[f"- {k}: {lv} (EP{e}부터{' · 계기: ' + tg if tg else ''})"
+                                         for k, (e, lv, tg) in list(sp.items())[:30]]]
+    return "\n".join(parts)
+
+
+def build_glossary_draft(ledger, concept_card=None):
+    """v2.19.0 B1 — 세계관 사전 초안. 대장의 '설정'(처음 정한 정의)과 호칭을 모은다. LLM을 쓰지 않는다.
+
+    초안일 뿐이다 — 작가가 고쳐서 확정한 텍스트만 집필에 들어간다.
+    """
+    lg = ledger or {}
+    eps = sorted(int(k) for k in lg if str(k).isdigit())
+    facts, titles = {}, {}
+    for e in eps:
+        d = lg.get(e) or lg.get(str(e)) or {}
+        for f in (d.get("facts") or []):
+            if isinstance(f, dict) and f.get("subject"):
+                facts.setdefault(str(f["subject"]).strip(), []).append((e, str(f.get("fact", "")).strip()))
+        for t in (d.get("titles") or []):
+            if isinstance(t, dict) and t.get("target") and t.get("title"):
+                titles.setdefault(str(t["target"]).strip(), set()).add(str(t["title"]).strip())
+    out = ["# 세계관 사전 — 작가 확정본 (이 텍스트가 매 회차 집필에 들어갑니다)",
+           "# 형식: '- 항목: 정의 (한자 표기)'. 회차마다 정의가 달랐던 항목은 ⚠ 표시 — 하나로 고쳐 주세요."]
+    for k, vs in facts.items():
+        uniq = []
+        for e, v in vs:
+            if v and v not in [u for _, u in uniq]:
+                uniq.append((e, v))
+        if not uniq:
+            continue
+        if len(uniq) == 1:
+            out.append(f"- {k}: {uniq[0][1]}")
+        else:
+            out.append(f"- ⚠ {k}: " + " ↔ ".join(f"(EP{e}) {v}" for e, v in uniq[:4]))
+    if titles:
+        out.append("# 호칭 — 한 사람에게 둘 이상이면 하나로 정해 주세요")
+        for k, v in titles.items():
+            out.append(f"- {'⚠ ' if len(v) > 1 else ''}{k} 호칭: {' / '.join(sorted(v))}")
+    out.append("# 상징 오브젝트 — 반응 조건과 회차당 상한 (예시, 고쳐서 쓰세요)")
+    out.append("@상징 구슬 | 조건: 물리적 타격을 흡수할 때만 반응 | 회차당 2")
+    return "\n".join(out)
+
+
 def ledger_done_text(ledger, ep_number):
     """판정관 R1용 — 이미 끝난 장면·소개·시연·설명 목록."""
     rows = [f"(EP{e}) {x}" for e, x in _ledger_items(ledger, ep_number, "scenes")]
@@ -7613,4 +7805,5 @@ def build_arc_revision_block(range_start, range_end, notes="", locks="", next_ep
         parts += [f"### 구간 다음 회차 (바꾸지 않는다 — EP{range_end}의 끝이 여기에 자연스럽게 이어져야 한다)",
                   next_eps_text.strip()[:3000]]
     parts.append("구간 안에서 같은 사건을 두 번 쓰지 않고, 비는 자리는 다음 큰 사건을 앞당겨 채운다.")
+    parts.append("연재 드라마 규칙 9~11(승리 배분·압박 논리·상징 반응 조건)을 이 구간에도 적용한다.")
     return "\n".join(parts)

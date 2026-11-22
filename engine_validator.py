@@ -5,6 +5,7 @@
 · 초식 일관성 정적 검사 · 장르 밀도 정적 검사
 
 [변경 이력]
+v2.19.0 (2026-11-22) — 문체 검증기 style_scan() (T1 필수·T2 권장), roster_gaps(), 기준표 Q1·D1 위반 수집
 v2.17.0 (2026-11-22) — scan_meta_leaks()가 '1학년 A' · '이름 미정' 같은 이름 자리표시도 잡는다
 v2.10.0 (2026-11-07) — 서사 장치 연속성 · 출처 없는 인물 검출 · 인물명 오검출 수정
   · [사고 패턴 I 재발] scan_wuxia_density의 무공명 검출이 한자 병기 인명
@@ -3013,7 +3014,7 @@ def _std_locate(quote: str, text: str, _cache: dict = None) -> Optional[float]:
 def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
                               concept_card=None, platform: str = "문피아",
                               episode_plot=None, has_prev_hook: bool = False,
-                              has_ledger: bool = False) -> dict:
+                              has_ledger: bool = False, symbol_rules=None) -> dict:
     """회차 기준표 판정.
 
     Returns:
@@ -3036,6 +3037,8 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
     rows = []
     violations = []   # v2.14.0: K1 위반 문장 (보정용) [{"quote","conflicts_with"}]
     r1_violations = []   # v2.15.0: R1 재소개·재시연 문장
+    style_vios = []      # v2.19.0: T1 문체 초과 문장
+    more_vios = []       # v2.19.0: Q1 연속성·회상 / D1 비문
 
     def row(it, status, detail="", quote=""):
         rows.append({"id": it["id"], "name": it["name"], "need": it["need"], "axis": it["axis"],
@@ -3054,6 +3057,17 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
             leaks = scan_meta_leaks(text)
             row(it, "충족" if not leaks else "미달",
                 "없음" if not leaks else "발견: " + ", ".join(leaks[:6]))
+            continue
+        if iid in ("T1", "T2"):   # v2.19.0 문체
+            keys = STYLE_T1 if iid == "T1" else STYLE_T2
+            _sc = style_scan(text, symbol_rules)
+            over = {k: v for k, v in _sc["over"].items() if k.split(":")[0] in keys}
+            if iid == "T1":
+                style_vios.extend(style_violations(_sc, keys=STYLE_T1))
+            row(it, "충족" if not over else "미달",
+                "상한 안" if not over else " · ".join(
+                    f"{STYLE_LABELS.get(k.split(':')[0], k)}{'(' + k.split(':')[1] + ')' if ':' in k else ''} {n}회/상한 {c}"
+                    for k, (n, c) in over.items()))
             continue
         if iid == "H2":
             lim = standard_hanja_limit(concept_card, ep_number)
@@ -3096,6 +3110,8 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
                     found.append((q, str(v.get("conflicts_with") or "")))
             if iid == "K1":
                 violations = [{"quote": q, "conflicts_with": c} for q, c in found]
+            elif iid in ("Q1", "D1"):
+                more_vios.extend({"quote": q, "conflicts_with": f"[{iid}] {c}"} for q, c in found)
             else:
                 r1_violations.extend({"quote": q, "conflicts_with": c} for q, c in found)
             if not found:
@@ -3137,7 +3153,7 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
     else:
         verdict = "기준 충족"
     return {"verdict": verdict, "fail_ids": fail, "rows": rows, "violations": violations,
-            "r1_violations": r1_violations,
+            "r1_violations": r1_violations, "style_violations": style_vios, "more_violations": more_vios,
             "text_sig": standard_text_sig(text), "ep": int(ep_number or 0)}
 
 
@@ -3253,6 +3269,203 @@ def hanja_variants(episodes: dict) -> dict:
     return {w: {h: sorted(es) for h, es in v.items()} for w, v in m.items() if len(v) > 1}
 
 
+# ═══════════════════════════════════════════════════
+# v2.19.0 — 문체 검증기 (T1): AI 말투 패턴 차단
+# ───────────────────────────────────────────────────
+# 작가 검토(아미고 EP1~15)에서 회차마다 반복된 패턴을 코드로 센다. 판정에 LLM을 쓰지 않는다.
+#   C1 서술자 결론: "A가 아니라 B였다" 대조 · "~라는 뜻이었다" · "그게 전부였다/그뿐이었다/그게 다였다"
+#   C2 무공 해설 템플릿: 현재형 해설 문단 · "대신/다만" 약점 접속
+#   C3 어휘 반복: "처음" · 비유("~처럼/~것 같았다/~듯")
+#   C4 장면 끝 단문 3연속
+#   C5 상징 오브젝트 반응 빈도 (세계관 사전의 '@상징' 줄)
+#   A2 서술자 예고 ("~할 것이다")
+STYLE_CAPS = {
+    "contrast": 2,      # "아니라 … 였다" 대조 서술
+    "meaning": 1,       # "~라는 뜻이었다 / 뜻이었다"
+    "summary": 1,       # "그게 전부였다 / 그뿐이었다 / 그게 다였다 / 그것뿐이었다"
+    "first": 1,         # "처음" (대사 밖)
+    "simile": 5,        # "~처럼 / ~것 같았다 / ~듯" (대사 밖)
+    "triple": 1,        # 장면 끝 단문 3연속
+    "foreshadow": 0,    # 서술자 예고 "~ㄹ 것이다."
+    "expo_para": 0,     # 현재형 해설 문단
+    "daesin": 4,        # 문장 첫머리 "대신/다만" (해설 템플릿 신호)
+}
+# T1(필수): 서술자 결론·예고·해설 문단·장면 끝 리듬·상징 반응 / T2(권장 경고): 어휘 반복
+STYLE_T1 = ("contrast", "meaning", "summary", "foreshadow", "expo_para", "triple", "symbol")
+STYLE_T2 = ("first", "simile", "daesin")
+STYLE_LABELS = {
+    "contrast": "'~가 아니라 ~였다' 대조 서술", "meaning": "'~라는 뜻이었다'", "summary": "'그게 전부였다'류 결론",
+    "first": "'처음'", "simile": "비유('~처럼/~것 같았다/~듯')", "triple": "장면 끝 단문 3연속",
+    "foreshadow": "서술자 예고('~할 것이다')", "expo_para": "현재형 해설 문단", "daesin": "'대신/다만' 약점 접속",
+    "symbol": "상징 오브젝트 반응",
+}
+_QUOTE_RE = re.compile(r"[“\"「『][^”\"」』]*[”\"」』]")
+_SENT_SPLIT = re.compile(r"(?<=[.!?…])\s+|\n+")
+_SCENE_BREAK_RE = re.compile(r"^\s*(\*{1,}\s*){1,3}$|^\s*[＊◆◇■□●○#—–\-]{1,}\s*$|^\s*$")
+_CONTRAST_RE = re.compile(r"아니라[^.!?\n]{0,40}?(였다|이었다|였던 것이다|이다)[.!?…]")
+_MEANING_RE = re.compile(r"뜻이었다|의미였다")
+_SUMMARY_RE = re.compile(r"(그게|그것이|그것은) (전부|다)(였다|이었다)|그뿐이었다|그것뿐이었다|그게 다였다")
+_FIRST_RE = re.compile(r"처음")
+_SIMILE_RE = re.compile(r"처럼|것 같았다|것 같은|듯했다|듯이|듯한|듯 ")
+_PRESENT_END_RE = re.compile(r"(한다|된다|는다|ㄴ다|진다|있다|없다|이다|않는다|난다|운다|친다|든다|간다|온다)[.!?]?$")
+_PAST_END_RE = re.compile(r"(았다|었다|였다|했다|됐다|겠다|던 것이다)[.!?]?$")
+_DAESIN_RE = re.compile(r"^(대신|다만)[ ,]")
+
+
+def _narration(text):
+    """대사(따옴표 안)를 지운 서술만."""
+    return _QUOTE_RE.sub(" ", text or "")
+
+
+def _sentences(s):
+    return [x.strip() for x in _SENT_SPLIT.split(s or "") if x.strip()]
+
+
+def _jong(ch):
+    o = ord(ch) - 0xAC00
+    return o % 28 if 0 <= o <= 11171 else -1
+
+
+def _has_rieul(ch):
+    o = ord(ch) - 0xAC00
+    return 0 <= o <= 11171 and o % 28 == 8
+
+
+def parse_symbol_rules(glossary_text):
+    """세계관 사전의 '@상징 구슬 | 조건: … | 회차당 2' 줄 → [{"name","cond","cap"}]."""
+    out = []
+    for line in (glossary_text or "").splitlines():
+        m = re.match(r"\s*@상징\s+([^|]+)\|?(.*)$", line)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        rest = m.group(2)
+        cap = re.search(r"회차당\s*(\d+)", rest)
+        cond = re.search(r"조건\s*[:：]\s*([^|]+)", rest)
+        out.append({"name": name, "cond": cond.group(1).strip() if cond else "",
+                    "cap": int(cap.group(1)) if cap else 2})
+    return out
+
+
+_SYMBOL_REACT = re.compile(r"뜨거|뜨겁|차가|차갑|미지근|데워|식었|식어|달아오|울렸|울었|떨렸|떨었|빛|반응|저릿|따끔|싸늘|묵직")
+
+
+def style_scan(text, symbol_rules=None):
+    """회차 한 편의 AI 말투 패턴 — {"counts":{k:n}, "over":{k:(n,cap)}, "samples":{k:[문장]}}."""
+    narr = _narration(text)
+    sents = _sentences(narr)
+    counts, samples = {}, {}
+
+    def hit(k, sent):
+        counts[k] = counts.get(k, 0) + 1
+        samples.setdefault(k, [])
+        if len(samples[k]) < 8:
+            samples[k].append(sent[:120])
+
+    for sn in sents:
+        if _CONTRAST_RE.search(sn):
+            hit("contrast", sn)
+        if _MEANING_RE.search(sn):
+            hit("meaning", sn)
+        if _SUMMARY_RE.search(sn):
+            hit("summary", sn)
+        for _ in _FIRST_RE.finditer(sn):
+            hit("first", sn)
+        for _ in _SIMILE_RE.finditer(sn):
+            hit("simile", sn)
+        if _DAESIN_RE.search(sn):
+            hit("daesin", sn)
+        m = re.search(r"([가-힣])([가-힣]) 것이다[.!?]?$", sn)
+        if m and _has_rieul(m.group(2)) and not (m.group(2) == "을" and _jong(m.group(1)) == 20):
+            hit("foreshadow", sn)     # '나올 것이다'는 예고, '뽑았을 것이다'는 과거 추측이라 제외
+    # "…가 아니었다. …였다." 두 문장 대조
+    for a, b in zip(sents, sents[1:]):
+        if re.search(r"아니었다[.!?…]?$", a) and re.search(r"(였다|이었다)[.!?…]?$", b) and len(b) <= 30:
+            hit("contrast", a + " " + b)
+    # 현재형 해설 문단: 대사 없는 문단에서 서술 문장 3개 이상이 현재형으로 끝남
+    for para in (text or "").split("\n"):
+        if not para.strip() or _QUOTE_RE.search(para):
+            continue
+        ss = _sentences(para)
+        pres = [x for x in ss if _PRESENT_END_RE.search(x) and not _PAST_END_RE.search(x)]
+        if len(ss) >= 3 and len(pres) >= 3 and len(pres) >= len(ss) * 0.6:
+            hit("expo_para", para.strip())
+    # 단문 3연속: 서술 문장이 13자 이하로 3개 이상 연달아 이어지는 묶음 (대사·긴 문장·장면 구분에서 끊는다)
+    run = []
+    def _close():
+        if len(run) >= 3:
+            hit("triple", " / ".join(run[-3:]))
+    for ln in (text or "").split("\n"):
+        if not ln.strip() or ln.strip() == "***" or _QUOTE_RE.search(ln):
+            _close(); run = []
+            continue
+        for x in _sentences(ln):
+            if len(x) <= 13:
+                run.append(x)
+            else:
+                _close(); run = []
+    _close()
+    # 상징 오브젝트 반응
+    for r in (symbol_rules or []):
+        n = 0
+        for sn in sents:
+            if r["name"] in sn and _SYMBOL_REACT.search(sn):
+                n += 1
+                samples.setdefault("symbol", [])
+                if len(samples["symbol"]) < 8:
+                    samples["symbol"].append(sn[:120])
+        counts[f"symbol:{r['name']}"] = n
+    over = {}
+    for k, cap in STYLE_CAPS.items():
+        if counts.get(k, 0) > cap:
+            over[k] = (counts[k], cap)
+    for r in (symbol_rules or []):
+        k = f"symbol:{r['name']}"
+        if counts.get(k, 0) > r["cap"]:
+            over[k] = (counts[k], r["cap"])
+    return {"counts": counts, "over": over, "samples": samples}
+
+
+def style_violations(scan, limit=10, keys=None):
+    """초과한 패턴의 예시 문장 → 보정용 [{"quote","conflicts_with"}]. keys로 T1·T2를 고른다."""
+    out = []
+    for k, (n, cap) in (scan.get("over") or {}).items():
+        base = k.split(":")[0]
+        if keys and base not in keys:
+            continue
+        key = "symbol" if base == "symbol" else base
+        label = STYLE_LABELS.get(key, key)
+        for q in (scan.get("samples") or {}).get(key, [])[cap if base not in ("expo_para",) else 0:]:
+            q1 = q.split(" / ")[0] if base == "triple" else q
+            out.append({"quote": q1[:120],
+                        "conflicts_with": f"{label} 회차당 {cap}회 이하 (지금 {n}회) — " + {
+                            "contrast": "대조로 의미를 정리하지 말고 행동·대사로 보여 준다",
+                            "meaning": "서술자가 의미를 풀지 않는다",
+                            "summary": "결론 문장을 지우거나 구체적 행동으로 바꾼다",
+                            "first": "'처음'을 빼고 쓴다",
+                            "simile": "비유를 빼고 직접 묘사한다",
+                            "triple": "단문 셋을 한두 문장으로 합친다",
+                            "foreshadow": "다음 화를 예고하지 않는다 — 지금 장면으로 끝낸다",
+                            "expo_para": "현재형 해설을 인물 대사·실패·전투 결과로 바꾼다",
+                            "daesin": "'대신/다만' 약점 해설을 장면 속 실패로 바꾼다",
+                            "symbol": "상징 오브젝트 반응을 빼거나 정해진 조건에서만 반응시킨다",
+                        }.get(key, "")})
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def roster_gaps(ledger, names, upto, gap=4):
+    """E1 — 이름 붙은 인물이 마지막 등장 후 gap화 이상 안 나옴: [(이름, 마지막 회차)]."""
+    last = {}
+    for e in sorted(int(k) for k in (ledger or {}) if str(k).isdigit() and int(k) <= upto):
+        pres = (ledger.get(e) or ledger.get(str(e)) or {}).get("present") or []
+        for n in names:
+            if any(n in str(p) or str(p) in n for p in pres if str(p).strip()):
+                last[n] = e
+    return [(n, e) for n, e in last.items() if upto - e >= gap]
+
+
 def series_check(ledger: dict, window: int = 5, upto: int = 0) -> List[dict]:
     """5화 단위 연재 점검 — [{"range","flags":[...]}]. 대장(ledger) 기반."""
     eps = sorted(int(k) for k in (ledger or {}) if str(k).isdigit())
@@ -3279,10 +3492,22 @@ def series_check(ledger: dict, window: int = 5, upto: int = 0) -> List[dict]:
         acts = [x.get("antagonist_action") for x in L if str(x.get("antagonist_action") or "").strip()]
         if not acts:
             flags.append("악역이 실제로 한 행동이 없음 (지켜보기·웃기만)")
+        # v2.19.0 E3: 좌절 3화 연속 · 첫 7화 안에 명확한 승리
+        outs = [str(x.get("protagonist_outcome") or "") for x in L]
+        run = best = 0
+        for o in outs:
+            run = run + 1 if "좌절" in o else 0
+            best = max(best, run)
+        if best >= 3:
+            flags.append(f"좌절 {best}화 연속 — 통쾌한 장면이 필요함")
         for mo, es in motif_seen.items():
             if len(es) >= 3 and es[0] < s and not any(s <= e < s + window for e in es):
                 flags.append(f"모티프 실종 — '{mo}' EP{es[-1]} 이후 안 나옴")
         out.append({"range": f"EP{s}~EP{s + window - 1}", "flags": flags})
+    first7 = [ledger.get(e) or ledger.get(str(e)) or {} for e in eps if e <= 7]
+    if len(first7) >= 7 and not any(x.get("protagonist_win") or "승리" in str(x.get("protagonist_outcome") or "")
+                                    for x in first7):
+        out.insert(0, {"range": "EP1~EP7", "flags": ["첫 7화 안에 주인공의 명확한 승리가 없음 (E3)"]})
     return out
 
 

@@ -1,9 +1,16 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.18.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.19.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.19.0 (2026-11-22) — 작가 검토 반영: 상태 장부 · 세계관 사전 · AI 말투 차단 · 수정 원고 일괄 불러오기
+  · 판정: Q1(상태·회상 정합)에 ledger_state_text, T1/T2(문체)에 세계관 사전 @상징 규칙, K1에 세계관 사전
+  · 연속성 블록: 세계관 사전 + 상태 장부(앞 화 끝 상태·소지품·대사 기록·'처음'·해설한 기술·단서) + 오래 안 나온 인물(E1)
+  · 🛠 보정: T1 초과 문장·Q1 모순 문장·D1 비문을 그 문장만 교정 (재집필 아님)
+  · 🧾 연속성 대장 칸: 📚 세계관 사전(작가 확정본, 대장에서 초안 만들기) · 문체 점검 표 · 등장 공백 인물
+  · 📥 수정 원고 일괄 불러오기: 'EP12. 제목' 줄로 회차를 나눠 본문 등록 (기존 원고는 버전 보관, 그 회차 대장 초기화)
+  · 현황판 다음 할 일: 대장 없는 회차 · v2.19 새 항목 없는 대장 · 세계관 사전 미확정 안내
 v2.18.0 (2026-11-22) — 📋 작업 현황판
   · [작가 지적] "뭔가 너만 알고. UI가 불편한 건 뭐지?" — 엔진 상태를 화면이 직접 말하게 한다
   · 화면 맨 위 작업 현황판: 원고 n화 · 기준 미달 n화 · 마지막 백업 시각
@@ -525,6 +532,8 @@ from prompt import (
     parse_minor_names_text,
     _fix_josa,
     build_length_insert_prompt,            # v2.17.1 — 절약형 분량 보강
+    ledger_state_text,                     # v2.19.0 — 상태 장부
+    build_glossary_draft,                  # v2.19.0 — 세계관 사전 초안
     build_narrative_devices_prompt,
     build_narrative_device_block,
     NARRATIVE_DEVICE_FIELDS,
@@ -545,7 +554,7 @@ from profession_pack import (
     build_protagonist_type_detail_block,
     auto_inject_profession_blocks,
 )
-from parser import parse_brief
+from parser import parse_brief, split_episodes   # v2.19.0 split_episodes
 from docx_builder import (
     build_episode_docx, build_season_docx, build_proposal_docx,
     build_martial_codex_docx,           # v2.7.0 신규
@@ -580,7 +589,8 @@ from engine_validator import (
     scan_meta_leaks,                # v2.15.0
     cross_episode_repetition,       # v2.15.0
     hanja_variants,                 # v2.15.0
-    series_check,                   # v2.15.0
+    series_check,                   # v2.15.0,
+    style_scan, parse_symbol_rules, roster_gaps, STYLE_LABELS,   # v2.19.0
 )
 
 
@@ -1069,6 +1079,7 @@ defaults = {
     "rev_active": None,           # v2.16.0 — 진행 중인 구간 재설계 (세션 전용)
     "canon_locks": "",            # v2.15.0 — 작가 설정 잠금 (최우선)
     "minor_names": {},            # v2.17.0 — 단역 이름표 {"1학년 A": "변한결"}
+    "canon_glossary": "",         # v2.19.0 — 세계관 사전 (작가 확정본)
     "ledger_active": None,        # v2.15.0 — 대장 일괄 생성 진행 (세션 전용)
     "extension_mode": "bridge",
     "extension_eps": 50,
@@ -1156,6 +1167,7 @@ PROJECT_KEYS = [
     "continuity_ledger", "canon_locks", # v2.15.0
     "core_arc_versions",                # v2.16.0
     "minor_names",                      # v2.17.0
+    "canon_glossary",                   # v2.19.0
     # v2.12.0: 기준표 판정 · 기준점 원고
     "standard_results", "benchmarks", "benchmark_results",
 ]
@@ -1466,6 +1478,9 @@ def _continuity_for(ep, rating):
         _ledger(), ep, prev_ending=_prev_ending(ep, rating),
         locks=st.session_state.get("canon_locks") or "", overused=_overused(ep, rating),
         minor_names=st.session_state.get("minor_names") or {},
+        glossary=st.session_state.get("canon_glossary") or "",
+        roster_gaps=roster_gaps(_ledger(), _char_names() + list((st.session_state.get("minor_names") or {}).values()),
+                                ep - 1),
     )
 
 
@@ -1667,18 +1682,21 @@ def _judge_episode(ep, text, platform, rating="15금"):
     S = st.session_state
     cc = S.concept_card
     canon = "\n\n".join(x for x in (_effective_direction(), build_world_bible_block(cc),
-                                     (S.get("canon_locks") or "")) if x and x.strip())
+                                     (S.get("canon_locks") or ""), (S.get("canon_glossary") or ""))
+                          if x and x.strip())
     prev_hook = _prev_ending(ep, rating, 1000)          # v2.15.0 C2
     done = ledger_done_text(_ledger(), ep)              # v2.15.0 R1
+    state = ledger_state_text(_ledger(), ep)            # v2.19.0 Q1
     r = evaluate_episode_standard(
         text, ep,
         safe_json(call_claude(
             build_standard_check_prompt(text, ep, cc, S.episode_plots.get(ep), canon,
-                                        prev_hook=prev_hook, done_text=done),
+                                        prev_hook=prev_hook, done_text=done, state_text=state),
             max_tokens=MAX_TOKENS_ANALYSIS, model=MODEL_SONNET,
         )),
         cc, platform, S.episode_plots.get(ep),
         has_prev_hook=bool(prev_hook), has_ledger=bool(done),
+        symbol_rules=parse_symbol_rules(S.get("canon_glossary") or ""),
     )
     S.standard_results[ep] = r
     return r
@@ -1752,7 +1770,7 @@ def fix_episode_pipeline(ep, rating, platform):
         plen = PLATFORM_LENGTH.get(platform, {"min": 5000, "max": 6000})
 
         # ① 구조 미달(M1·P1·C1·H1·A1·S1)은 재집필 1회 — v2.17.1: 작가가 켠 경우만 (본문 전체 재출력, 비용 큼)
-        struct = [f for f in fails if f not in ("L1", "K1", "R1", "X2")]
+        struct = [f for f in fails if f not in ("L1", "K1", "R1", "X2", "T1", "Q1", "D1")]
         if struct and not S.get("fix_redo", False):
             out["steps"].append(f"구조 미달 {', '.join(struct)} — 재집필 안 함 (작가 확인)")
             struct = []
@@ -1776,6 +1794,10 @@ def fix_episode_pipeline(ep, rating, platform):
         vio = _k1_violations(res) if "K1" in (res.get("fail_ids") or []) else []
         # v2.15.0: 재소개·재시연(R1)과 회차 번호 노출(X2)도 같은 방식으로 그 문장만 고친다
         vio += [v for v in (res.get("r1_violations") or []) if isinstance(v, dict) and v.get("quote")]
+        # v2.19.0: 문체 초과(T1)·상태/회상 모순(Q1)·비문(D1)도 그 문장만 고친다
+        vio += [v for v in (res.get("more_violations") or []) if isinstance(v, dict) and v.get("quote")]
+        if "T1" in (res.get("fail_ids") or []):
+            vio += [v for v in (res.get("style_violations") or []) if isinstance(v, dict) and v.get("quote")]
         # v2.17.0: 이름 자리표시('1학년 A')는 이름표로 코드가 바로 바꾼다 (보정 버튼을 눌렀을 때만)
         _mn = S.get("minor_names") or {}
         if _mn:
@@ -2133,6 +2155,17 @@ def _render_work_board():
         elif not core_n:
             steps.append("STEP 2에서 Core Arc 50화 설계")
         elif not active:
+            _lg = S.get("continuity_ledger") or {}
+            _miss = [e for e in done if not (_lg.get(e) or _lg.get(str(e)))]
+            if done and _miss:
+                steps.append(f"연속성 대장이 없는 회차 {len(_miss)}화 (EP{', EP'.join(str(e) for e in _miss[:6])}"
+                             + (" …" if len(_miss) > 6 else "") + ") — STEP 3 🧾 연속성 대장에서 대장 만들기")
+            elif done and _lg and not any(isinstance((_lg.get(e) or _lg.get(str(e)) or {}).get("end_state"), dict)
+                                          for e in done):
+                steps.append("연속성 대장에 v2.19 새 항목(끝 상태·소지품·대사 기록)이 없습니다 — "
+                             "🧾 연속성 대장에서 '이미 있는 대장도 다시 만든다'를 켜고 대장 만들기")
+            if done and not (S.get("canon_glossary") or "").strip():
+                steps.append("📚 세계관 사전 확정 — 🧾 연속성 대장 칸에서 '대장에서 초안 만들기' 후 ⚠ 항목을 하나로 고치기")
             if under:
                 steps.append(f"기준 미달 {len(under)}화 (EP{', EP'.join(str(e) for e in under[:8])}"
                              + (" …" if len(under) > 8 else "")
@@ -3794,6 +3827,45 @@ with tab3:
                 _pb = _pending_blocks[-1]
                 st.warning(f"📦 EP{_pb[0]}~EP{_pb[1]} 묶음이 완성됐습니다. STEP 3 맨 아래 📦 마무리 · 원고 저장에서 원고 DOCX와 백업 JSON을 받아 두세요.")
 
+            # ──── v2.19.0: 📥 수정 원고 일괄 불러오기 ────
+            with st.expander("📥 수정 원고 일괄 불러오기 — 작가가 고친 여러 회차 DOCX를 본문으로", expanded=False):
+                st.caption("'EP12. 제목' 또는 '12화' 제목 줄로 회차를 나눕니다. 등록하면 기존 엔진 원고는 회차마다 버전으로 남고, "
+                           "그 회차의 요약·기준표·연속성 대장은 지워집니다 — 등록 뒤 🧾 연속성 대장에서 '대장 만들기'를 누르면 "
+                           "고친 원고 기준으로 다시 뽑혀 다음 회차가 고친 원고를 이어받습니다.")
+                _bulk = st.file_uploader("수정 원고 (여러 개 가능)", type=["docx", "txt", "md"],
+                                         accept_multiple_files=True, key="bulk_import")
+                _parsed = {}
+                for _f in (_bulk or []):
+                    try:
+                        _parsed.update({k: v for k, v in split_episodes(parse_brief(_f)).items() if k not in _parsed})
+                    except Exception as _ex:
+                        st.error(f"{_f.name}: 읽기 실패 — {_ex}")
+                if _bulk and not _parsed:
+                    st.warning("회차 제목('EP12. 제목' 또는 '12화')을 찾지 못했습니다.")
+                if _parsed:
+                    _cur = st.session_state.episodes_19 if rating == "19금" else st.session_state.episodes_15
+                    st.dataframe([{"회차": f"EP{e}", "수정 원고": f"{len(t):,}자",
+                                   "현재 본문": f"{len(_cur.get(e) or ''):,}자" if _cur.get(e) else "없음"}
+                                  for e, t in sorted(_parsed.items())], hide_index=True, use_container_width=True)
+                    if st.button(f"EP{min(_parsed)}~EP{max(_parsed)} {len(_parsed)}화를 본문으로 등록 ({rating})",
+                                 type="primary", key="bulk_import_go"):
+                        _slot_k = "episodes_19" if rating == "19금" else "episodes_15"
+                        _led = dict(st.session_state.get("continuity_ledger") or {})
+                        _m = dict(st.session_state.episode_meta or {})
+                        for _e, _t in sorted(_parsed.items()):
+                            _push_version(_e, rating, "작가 수정 원고 등록 전")
+                            st.session_state[_slot_k][_e] = _t
+                            _m[_e] = {"source": "author", "file": "일괄 불러오기",
+                                      "imported_at": datetime.now().isoformat(timespec="seconds")}
+                            for _k in ("episode_summaries", "validation_results", "standard_results"):
+                                st.session_state[_k].pop(_e, None)
+                            _led.pop(_e, None); _led.pop(str(_e), None)
+                        st.session_state.episode_meta = _m
+                        st.session_state.continuity_ledger = _led
+                        autosave_project("수정 원고 일괄 등록")
+                        st.success(f"✅ {len(_parsed)}화 등록. 🧾 연속성 대장에서 '대장 만들기'를 눌러 주세요.")
+                        st.rerun()
+
             # ──── v2.15.0: 🧾 연속성 대장 · 연재 점검 ────
             _led_now = _ledger()
             _led_have = [e for e in _done_eps if (_led_now.get(e) or _led_now.get(str(e)))]
@@ -3814,6 +3886,28 @@ with tab3:
                         "- 지훈 시점에서 신유선 호칭은 '이사장님'.\n- 장웨이의 소림 첫 수업은 한 번만."
                     ),
                 )
+                # v2.19.0 — 📚 세계관 사전 (B1·C5)
+                st.markdown("**📚 세계관 사전** — 무공·무기·고유명사의 정의와 한자 표기, 호칭, 상징 오브젝트의 반응 조건. "
+                            "여기 적은 확정본이 매 회차 집필·판정에 들어갑니다. "
+                            "상징 오브젝트는 `@상징 구슬 | 조건: 물리적 타격을 흡수할 때만 반응 | 회차당 2` 형식으로 적습니다.")
+                _gl_c1, _gl_c2 = st.columns([3, 1])
+                with _gl_c2:
+                    if st.button("대장에서 초안 만들기", key="glossary_draft", use_container_width=True,
+                                 disabled=not _ledger()):
+                        _draft = build_glossary_draft(_ledger(), st.session_state.concept_card)
+                        if not (st.session_state.get("canon_glossary") or "").strip():
+                            st.session_state["canon_glossary"] = _draft
+                            st.rerun()
+                        else:
+                            st.session_state["_glossary_draft_view"] = _draft
+                with _gl_c1:
+                    st.text_area("세계관 사전 (작가 확정본)", key="canon_glossary", height=200,
+                                 label_visibility="collapsed",
+                                 placeholder="- 아미자: 마디가 이어진 연결형 (阿美刺)\n- 창미보: 창끝을 두고 꼬리가 먼저 도는 회피\n"
+                                             "- 무당제일고: 武當\n@상징 구슬 | 조건: 물리적 타격을 흡수할 때만 반응 | 회차당 2")
+                if st.session_state.get("_glossary_draft_view"):
+                    with st.expander("대장에서 뽑은 초안 (이미 적은 사전이 있어 덮어쓰지 않았습니다 — 필요한 줄만 옮기세요)"):
+                        st.code(st.session_state["_glossary_draft_view"], language=None)
                 # v2.17.0 — 단역 이름표
                 _mn = st.session_state.get("minor_names") or {}
                 if _mn:
@@ -3878,6 +3972,28 @@ with tab3:
                     if _meta:
                         st.markdown("**메타 노출 — 본문 속 회차 번호·# 기호 (🛠 보정에서 자동 정리)**")
                         st.markdown("\n".join(f"- EP{e}: {', '.join(v)}" for e, v in _meta.items()))
+                    # v2.19.0 — 문체 표 (T1·T2) · 등장 공백 (E1)
+                    _srules = parse_symbol_rules(st.session_state.get("canon_glossary") or "")
+                    _skeys = ["contrast", "meaning", "summary", "foreshadow", "expo_para", "triple", "first", "simile", "daesin"]
+                    _rows = []
+                    for _e in _done_eps:
+                        _scn = style_scan(_texts_now[_e], _srules)
+                        _r = {"회차": f"EP{_e}"}
+                        for _k in _skeys:
+                            _n = _scn["counts"].get(_k, 0)
+                            _r[STYLE_LABELS[_k][:10]] = f"{_n}⚠" if _k in _scn["over"] else str(_n)
+                        for _sr in _srules:
+                            _kk = f"symbol:{_sr['name']}"
+                            _r[_sr["name"]] = f"{_scn['counts'].get(_kk, 0)}⚠" if _kk in _scn["over"] else str(_scn["counts"].get(_kk, 0))
+                        _rows.append(_r)
+                    if _rows:
+                        st.markdown("**문체 점검 — AI 말투 패턴 (⚠ = 회차당 상한 초과, 🛠 보정에서 그 문장만 교정)**")
+                        st.dataframe(_rows, hide_index=True, use_container_width=True)
+                    _gaps = roster_gaps(_ledger(), _char_names() + list((st.session_state.get("minor_names") or {}).values()),
+                                        max(_done_eps) if _done_eps else 0)
+                    if _gaps:
+                        st.markdown("**오래 안 나온 이름 있는 인물 (4화 이상)** — 다음 회차 연속성 블록에 들어갑니다")
+                        st.markdown("\n".join(f"- {n}: EP{e} 이후 안 나옴" for n, e in _gaps))
                     _nx = (max(_done_eps) + 1) if _done_eps else 1
                     with st.expander(f"EP{_nx}을 쓸 때 들어갈 연속성 블록 미리보기", expanded=False):
                         st.markdown(_continuity_for(_nx, rating) or "(대장이 없습니다)")
