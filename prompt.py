@@ -1,10 +1,15 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.20.1 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.21.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.21.0 (2026-11-24) — 1화 판 전체 제시 (모니터 의견: "초반 전개가 너무 느리다. 1화에 모든 상황이 나와야 한다")
+  · EP1_ESSENTIALS 일곱 요소: 주인공·결핍·무대·위기와 시한·목표·보상·적대 세력·끝 장면
+  · 기준표 O1(1화 전용, 필수, check="elements"): 요소마다 근거 문장을 판정관이 뽑고 코드가 본문과 대조
+  · standard_items_for(ep_number=) — 1화에만 O1. 집필 프롬프트에 일곱 요소를 풀어 알린다
+  · Core Arc 연재 드라마 규칙 12: 1화에 판 전체, 2화는 설명이 아니라 첫 충돌로
 v2.20.1 (2026-11-23) — DOCX 글꼴 함초롬바탕 통일 (docx_builder.py, 룰 변경 없음)
 v2.20.0 (2026-11-22) — 대사·지문 줄바꿈 원칙: 집필 규칙(WUXIA_STYLE_RULES)·기준표 F1 추가. 정리는 코드(engine_validator)가 한다
 v2.19.0 (2026-11-22) — 작가 검토 반영: 상태 장부 · 세계관 사전 · AI 말투 차단
@@ -379,7 +384,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.20.1"
+ENGINE_VERSION = "v2.21.0"
 ENGINE_BUILD_DATE = "2026-11-22"
 
 # ═══════════════════════════════════════════════════
@@ -4365,6 +4370,9 @@ CORE_ARC_DESIGN = """[Core Arc 완결형 설계 원칙]
    학생 개인을 협박 — 감사에서는 학교 안전 관리 문제가 된다)은 쓰지 않는다.
 11. 상징 오브젝트는 반응 조건을 먼저 정한다 (v2.19.0): 예) 구슬은 물리적 타격을 흡수할 때만 반응.
    감정(질투·그리움)에 반응하는 기분 표시기로 쓰지 않는다. 회차당 1~2회.
+12. 1화에 판 전체를 깐다 (v2.21.0 — 모니터 의견 "초반 전개가 너무 느리다"): 1화 안에 주인공(할 수 있는 것)·결핍·무대·
+   위기와 시한·목표와 보상·적대 세력의 첫 수·2화로 끄는 끝 장면이 모두 나온다. 2화로 미루는 설명은 없다.
+   설정은 해설로 풀지 않고 사건 속 대사·행동으로 압축한다. 2화는 설명이 아니라 첫 충돌로 시작한다.
 """
 
 
@@ -6987,6 +6995,10 @@ WUXIA_STANDARD_EPISODE = [
      "name": "비문·논리",
      "criterion": "주술 호응이 깨진 문장, 어색한 연어, '꿰어졌다/이어졌다' 뒤 서로 무관한 나열, "
                   "앞 문장에서 이어지지 않는 논리 점프가 없다 (명백한 것만) — v2.19.0"},
+    {"id": "O1", "axis": "도입", "need": "필수", "check": "elements", "applies": "ep1",
+     "name": "1화 판 전체 제시",
+     "criterion": "1화 안에 주인공(할 수 있는 것)·결핍·무대·위기와 시한·목표와 보상·적대 세력·2화로 끄는 끝 장면이 "
+                  "모두 장면이나 대사로 나온다 — 모니터 의견 '초반 전개가 느리다' 반영 v2.21.0"},
     {"id": "F1", "axis": "문체", "need": "필수", "check": "static", "applies": "always",
      "name": "대사·지문 줄바꿈",
      "criterion": "대사는 따옴표로 시작하는 독립 문단, 지문은 다른 문단, 두 인물의 대사는 한 문단에 없다. "
@@ -7060,12 +7072,26 @@ def standard_hanja_limit(concept_card=None, ep_number=0):
     return 8
 
 
-def standard_items_for(concept_card=None, has_plot=True, has_prev_hook=False, has_ledger=False):
-    """이 작품·회차에 적용되는 회차 기준표 항목."""
+# v2.21.0 — 1화에 반드시 깔려야 하는 일곱 요소 (O1). 모니터 의견: "초반 전개가 너무 느리다. 1화에 모든 상황이 나와야 한다"
+EP1_ESSENTIALS = [
+    ("주인공", "주인공이 누구이고 무엇을 할 수 있는지 장면으로 보이는 문장"),
+    ("결핍", "주인공이 못 하는 것·약점이 장면으로 보이는 문장"),
+    ("무대", "이야기의 주 무대(학교·문파·세력)가 직접 등장하거나 구체적으로 소개되는 문장"),
+    ("위기와 시한", "무대 또는 주인공이 처한 위기와 시간 제한이 드러나는 문장"),
+    ("목표·보상", "주인공이 노리게 될 목표나 걸린 보상(대회·상금·자리)이 드러나는 문장"),
+    ("적대 세력", "적대 세력이 존재를 드러내거나 첫 수를 두는 문장"),
+    ("끝 장면", "2화를 읽게 만드는 마지막 장면의 문장"),
+]
+
+
+def standard_items_for(concept_card=None, has_plot=True, has_prev_hook=False, has_ledger=False, ep_number=0):
+    """이 작품·회차에 적용되는 회차 기준표 항목. ep_number=1이면 1화 전용 항목(O1)이 붙는다."""
     ap = standard_applies(concept_card)
     out = []
     for it in WUXIA_STANDARD_EPISODE:
         a = it["applies"]
+        if a == "ep1" and int(ep_number or 0) != 1:
+            continue
         if a == "prev_hook" and not has_prev_hook:
             continue
         if a == "ledger" and not has_ledger:
@@ -7121,8 +7147,11 @@ def build_standard_write_block(concept_card=None, ep_number=0, platform="문피�
     plen = get_platform_length(platform)
     lines = ["## 📏 최고의 무협 기준표 — 이 회차는 집필 후 아래 항목으로 점검된다",
              "점수는 없다. 항목마다 '충족 / 미달 / 누락'만 판정하고, 근거는 본문 문장이다."]
-    for it in standard_items_for(concept_card, has_plot=True):
+    for it in standard_items_for(concept_card, has_plot=True, ep_number=ep_number):
         crit = it["criterion"]
+        if it["id"] == "O1":
+            crit += "\n   " + "\n   ".join(f"· {k}: {d}" for k, d in EP1_ESSENTIALS) + (
+                "\n   → 2화로 미룰 설명이 없게 짠다. 설정은 해설이 아니라 사건 속 대사·행동으로, 1화 안에 전부.")
         if it["id"] == "L1":
             crit = f"공백 포함 {plen['min']:,}~{plen['max']:,}자"
         elif it["id"] == "H2":
@@ -7154,8 +7183,13 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
     plot = episode_plot if isinstance(episode_plot, dict) else {}
     scenes = [sc for sc in (plot.get("scenes") or []) if isinstance(sc, dict)]
     items = [it for it in standard_items_for(concept_card, has_plot=bool(scenes),
-                                             has_prev_hook=bool(prev_hook), has_ledger=bool(done_text))
+                                             has_prev_hook=bool(prev_hook), has_ledger=bool(done_text),
+                                             ep_number=ep_number)
              if it["check"] != "static"]
+    o1_block = ""
+    if any(it["id"] == "O1" for it in items):
+        o1_block = ('\n  "O1": [' + ", ".join(f'{{"element": "{k}", "quote": ""}}' for k, _ in EP1_ESSENTIALS)
+                    + '],')
     prev_block = (f"\n## 앞 화 마지막 장면 (C2 — 이 장면을 이어받는 본문 문장)\n{prev_hook[:1200]}\n"
                   if prev_hook else "")
     done_block = (f"\n## 연속성 대장 — 이미 끝난 장면·소개·시연·설명 (R1 — 이것을 처음처럼 다시 하는 본문 문장)\n"
@@ -7201,9 +7235,10 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
   "K1": [{{"quote": "", "conflicts_with": "어긋나는 확정 사항 한 줄"}}],
   "R1": [{{"quote": "", "conflicts_with": "이미 나온 장면·소개 한 줄"}}],
   "Q1": [{{"quote": "", "conflicts_with": "모순되는 장부 기록 한 줄 (예: EP3 끝 봉 끝이 가슴뼈에 닿음)"}}],
-  "D1": [{{"quote": "", "conflicts_with": "무엇이 틀렸나 (주술 호응·연어·나열 비약·논리 점프)"}}]
+  "D1": [{{"quote": "", "conflicts_with": "무엇이 틀렸나 (주술 호응·연어·나열 비약·논리 점프)"}}]{o1_block}
 }}
-items에는 위 기준 중 P1·K1·R1·Q1·D1을 뺀 모든 번호를 넣는다. R1·Q1 장부가 없으면 빈 목록.
+items에는 위 기준 중 P1·K1·R1·Q1·D1·O1을 뺀 모든 번호를 넣는다. R1·Q1 장부가 없으면 빈 목록.
+O1(1화일 때만)은 일곱 요소마다 그 요소가 드러난 본문 문장을 그대로 하나씩. 본문에 없으면 quote를 비운다 — 지어내지 않는다.
 D1은 명백한 비문만 고른다 — 문체 취향은 고르지 않는다. 최대 6개.
 JSON 외 텍스트 금지. 코드 블록 금지."""
 

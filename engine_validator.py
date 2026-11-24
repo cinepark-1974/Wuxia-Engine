@@ -5,6 +5,7 @@
 · 초식 일관성 정적 검사 · 장르 밀도 정적 검사
 
 [변경 이력]
+v2.21.0 (2026-11-24) — 기준표 O1(1화 판 전체 제시, check="elements") 판정
 v2.20.0 (2026-11-22) — format_dialogue_paragraphs()·dialogue_layout_issues(): 대사·지문 줄바꿈 원칙, 기준표 F1
 v2.19.0 (2026-11-22) — 문체 검증기 style_scan() (T1 필수·T2 권장), roster_gaps(), 기준표 Q1·D1 위반 수집
 v2.17.0 (2026-11-22) — scan_meta_leaks()가 '1학년 A' · '이름 미정' 같은 이름 자리표시도 잡는다
@@ -3030,7 +3031,7 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
     plot = episode_plot if isinstance(episode_plot, dict) else {}
     scenes = [sc for sc in (plot.get("scenes") or []) if isinstance(sc, dict)]
     items = standard_items_for(concept_card, has_plot=bool(scenes),
-                               has_prev_hook=has_prev_hook, has_ledger=has_ledger)
+                               has_prev_hook=has_prev_hook, has_ledger=has_ledger, ep_number=ep_number)
     llm = llm_result if isinstance(llm_result, dict) else {}
     llm_items = llm.get("items") if isinstance(llm.get("items"), dict) else {}
     have_llm = bool(llm_items) or bool(llm.get("P1")) or "K1" in llm
@@ -3082,6 +3083,20 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
             continue
         if not have_llm:
             row(it, "판정 불가", "판정관 응답 없음")
+            continue
+        if chk == "elements":      # v2.21.0 O1 — 1화 일곱 요소
+            from prompt import EP1_ESSENTIALS
+            got = {}
+            for b in (llm.get(iid) or []):
+                if isinstance(b, dict) and b.get("element"):
+                    got[str(b["element"]).strip()] = str(b.get("quote") or "")
+            missing = []
+            for k, _ in EP1_ESSENTIALS:
+                q = got.get(k, "")
+                if not q.strip() or _std_locate(q, text, cache) is None:
+                    missing.append(k)
+            row(it, "충족" if not missing else "미달",
+                f"일곱 요소 모두 1화에 있음" if not missing else "1화에 없는 요소: " + ", ".join(missing))
             continue
         if chk == "beats":
             got = {}
