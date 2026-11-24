@@ -1,9 +1,15 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.21.1 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.22.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.22.0 (2026-11-24) — 🧩 미정 해결: 엔진이 구체적 방법을 찾아 제안 (검색 + 창작)
+  · call_claude_research(): Anthropic 웹 검색 서버 도구(web_search_20250305, max_uses 5) 호출, pause_turn 이어 받기,
+    인용 출처 수집. 검색이 막힌 계정이면 검색 없이 다시 호출
+  · STEP 2 맨 위 '🧩 미정 해결': 설계의 미정 항목 자동 수집 + 작가 질문 입력 → 항목마다 장면형 안 3개(추천 표시·근거·약점·
+    새로 필요한 인물) → 채택하면 작가 설정 잠금에 추가되고 항목이 닫힌다. 다시 제안·버리기
+  · 현황판 다음 할 일에 미정 건수·채택 대기 제안 표시
 v2.21.1 (2026-11-24) — 기준표 O1(1화 7요소)·O2(2화 4요소) — 작가 지정 초반 구성 원칙
 v2.21.0 (2026-11-24) — 1화 판 전체 제시: 기준표 O1·Core Arc 규칙 12 (prompt·engine_validator). 구조 미달이라 자동 재집필 대상 아님 — 작가 확인
 v2.20.1 (2026-11-23) — DOCX 글꼴 함초롬바탕 통일: 표지·목차·본문·메타·기획서·무공 대전, 영문·숫자까지 (docx_builder)
@@ -544,6 +550,8 @@ from prompt import (
     build_length_insert_prompt,            # v2.17.1 — 절약형 분량 보강
     ledger_state_text,                     # v2.19.0 — 상태 장부
     build_glossary_draft,                  # v2.19.0 — 세계관 사전 초안
+    collect_open_items,                    # v2.22.0 — 미정 해결
+    build_resolve_open_item_prompt,
     build_narrative_devices_prompt,
     build_narrative_device_block,
     NARRATIVE_DEVICE_FIELDS,
@@ -827,6 +835,55 @@ def call_claude_opus(prompt, max_tokens=MAX_TOKENS_EPISODE, system=None):
     return call_claude(prompt, max_tokens=max_tokens, model=MODEL_OPUS, system=system)
 
 
+def call_claude_research(prompt, max_tokens=MAX_TOKENS_STRUCTURE, model=None, max_searches=5):
+    """v2.22.0 — 웹 검색 도구를 켠 호출 (Anthropic 서버 도구 web_search_20250305).
+
+    서버가 검색을 돌리다 pause_turn으로 멈추면 그 내용을 이어 붙여 다시 보낸다 (최대 3번).
+    Returns: (텍스트, [{"title","url"}], 검색 사용 여부). 검색이 막힌 계정이면 검색 없이 다시 호출한다.
+    """
+    model = model or MODEL_OPUS
+    client = get_client()
+    messages = [{"role": "user", "content": prompt}]
+    tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": int(max_searches)}]
+    texts, sources, used = [], [], False
+    try:
+        for _ in range(4):
+            kw = dict(model=model, max_tokens=max_tokens, system=SYSTEM_PROMPT, messages=messages, tools=tools)
+            effort = MODEL_EFFORT.get(model)
+            if effort:
+                kw["extra_body"] = {"output_config": {"effort": effort}}
+            resp = client.messages.create(**kw)
+            for b in (resp.content or []):
+                bt = getattr(b, "type", "")
+                if bt == "text":
+                    texts.append(getattr(b, "text", "") or "")
+                    for c in (getattr(b, "citations", None) or []):
+                        u, t = getattr(c, "url", ""), getattr(c, "title", "")
+                        hit = next((x for x in sources if x["url"] == u), None)
+                        if hit:
+                            hit.pop("unused", None)          # 결과로 받았다가 실제로 인용한 출처
+                        elif u:
+                            sources.append({"title": t or u, "url": u})
+                elif bt == "server_tool_use":
+                    used = True
+                elif bt == "web_search_tool_result":
+                    for r in (getattr(b, "content", None) or []):
+                        u, t = getattr(r, "url", ""), getattr(r, "title", "")
+                        if u and all(x["url"] != u for x in sources):
+                            sources.append({"title": t or u, "url": u, "unused": True})
+            if getattr(resp, "stop_reason", "") != "pause_turn":
+                break
+            messages = messages + [{"role": "assistant", "content": resp.content}]
+        cited = [x for x in sources if not x.get("unused")]
+        return "".join(texts), (cited or sources[:5]), used
+    except Exception as ex:
+        msg = str(ex)
+        if "web_search" in msg or "tool" in msg.lower():
+            st.caption(f"웹 검색을 쓸 수 없어 검색 없이 만듭니다 ({msg[:80]})")
+            return call_claude(prompt, max_tokens=max_tokens, model=model), [], False
+        raise
+
+
 def generate_arc_chunked(state_key, outline_key, ep_start, total, outline_prompt_fn,
                          chunk_prompt_fn, from_scratch, label="Arc"):
     """v2.12.3 — Arc 분할 생성 (Core·Extension 공통).
@@ -1091,6 +1148,9 @@ defaults = {
     "canon_locks": "",            # v2.15.0 — 작가 설정 잠금 (최우선)
     "minor_names": {},            # v2.17.0 — 단역 이름표 {"1학년 A": "변한결"}
     "canon_glossary": "",         # v2.19.0 — 세계관 사전 (작가 확정본)
+    "open_items_custom": "",      # v2.22.0 — 작가가 적은 풀 질문 (한 줄에 하나)
+    "open_item_proposals": {},    # v2.22.0 — {항목: {"options","recommend","research_notes","sources","at"}}
+    "resolved_items": [],         # v2.22.0 — 채택해 닫은 항목
     "ledger_active": None,        # v2.15.0 — 대장 일괄 생성 진행 (세션 전용)
     "extension_mode": "bridge",
     "extension_eps": 50,
@@ -1179,6 +1239,9 @@ PROJECT_KEYS = [
     "core_arc_versions",                # v2.16.0
     "minor_names",                      # v2.17.0
     "canon_glossary",                   # v2.19.0
+    "open_items_custom",                # v2.22.0
+    "open_item_proposals",
+    "resolved_items",
     # v2.12.0: 기준표 판정 · 기준점 원고
     "standard_results", "benchmarks", "benchmark_results",
 ]
@@ -1494,6 +1557,60 @@ def _continuity_for(ep, rating):
         roster_gaps=roster_gaps(_ledger(), _char_names() + list((st.session_state.get("minor_names") or {}).values()),
                                 ep - 1),
     )
+
+
+def _resolve_open_items(items, use_search=True):
+    """v2.22.0 — 항목마다 안 3개를 받아 open_item_proposals에 저장. 한 항목이 끝날 때마다 자동 저장."""
+    S = st.session_state
+    cc = S.get("concept_card") or {}
+    canon = "\n\n".join(x for x in (
+        json.dumps(cc, ensure_ascii=False)[:6000],
+        "### 작가 설정 잠금\n" + (S.get("canon_locks") or ""),
+        "### 세계관 사전\n" + (S.get("canon_glossary") or "")[:2500]) if x.strip())
+    arc = S.get("core_arc") or []
+    done_eps = sorted(int(k) for k in (S.get("episodes_15") or {}) if str(k).isdigit())
+    state = ledger_state_text(_ledger(), (max(done_eps) + 1) if done_eps else 1) if done_eps else ""
+    prog = st.progress(0.0, text="엔진 제안 만드는 중...")
+    props = dict(S.get("open_item_proposals") or {})
+    for i, it in enumerate(items):
+        prog.progress(i / max(1, len(items)), text=f"{i + 1}/{len(items)} — {it[:40]}")
+        m = re.search(r"EP\s?(\d+)", it)
+        if m:
+            e0 = int(m.group(1))
+            ctx = [x for x in arc if isinstance(x, dict) and abs(int(x.get("ep") or 0) - e0) <= 3]
+        else:
+            ctx = [x for x in arc if isinstance(x, dict)][:12]
+        arc_txt = "\n".join(f"EP{x.get('ep')} {x.get('title', '')}: {str(x.get('main_scene', ''))[:300]}" for x in ctx)
+        prompt = build_resolve_open_item_prompt(it, canon, arc_txt, state, use_search=use_search)
+        if use_search:
+            raw, srcs, used = call_claude_research(prompt, max_tokens=MAX_TOKENS_STRUCTURE)
+        else:
+            raw, srcs, used = call_claude_opus(prompt, max_tokens=MAX_TOKENS_STRUCTURE), [], False
+        d = safe_json(raw)
+        if isinstance(d, dict) and d.get("options"):
+            props[it] = {"options": [o for o in d["options"] if isinstance(o, dict)][:3],
+                         "recommend": d.get("recommend", 0), "research_notes": d.get("research_notes") or [],
+                         "sources": srcs, "searched": used,
+                         "at": datetime.now().strftime("%m-%d %H:%M")}
+            S.open_item_proposals = props
+            autosave_project("미정 해결 제안")
+        else:
+            st.warning(f"제안을 읽지 못했습니다: {it[:50]}")
+    prog.progress(1.0, text="완료")
+
+
+def _adopt_proposal(item, opt):
+    """채택한 안을 작가 설정 잠금에 넣고 항목을 닫는다."""
+    S = st.session_state
+    line = f"- [확정 · 엔진 제안 채택] {item[:120]} → {opt.get('title', '')}: {str(opt.get('scene', ''))[:400]}"
+    if opt.get("needs_new"):
+        line += f" (새로 필요: {str(opt['needs_new'])[:200]})"
+    S.canon_locks = ((S.get("canon_locks") or "").rstrip() + "\n" + line).strip()
+    S.resolved_items = list(S.get("resolved_items") or []) + [item]
+    props = dict(S.get("open_item_proposals") or {})
+    props.pop(item, None)
+    S.open_item_proposals = props
+    autosave_project("미정 항목 채택")
 
 
 def _assign_minor_names():
@@ -2180,6 +2297,11 @@ def _render_work_board():
                                           for e in done):
                 steps.append("연속성 대장에 v2.19 새 항목(끝 상태·소지품·대사 기록)이 없습니다 — "
                              "🧾 연속성 대장에서 '이미 있는 대장도 다시 만든다'를 켜고 대장 만들기")
+            _opn = collect_open_items(cc, S.get("core_arc"), S.get("resolved_items"))
+            if _opn or S.get("open_item_proposals"):
+                steps.append(f"미정 {len(_opn)}건" + (f" · 채택 대기 제안 {len(S.get('open_item_proposals') or {})}건"
+                                                     if S.get("open_item_proposals") else "")
+                             + " — STEP 2 🧩 미정 해결에서 엔진 제안을 받고 고르기")
             if done and not (S.get("canon_glossary") or "").strip():
                 steps.append("📚 세계관 사전 확정 — 🧾 연속성 대장 칸에서 '대장에서 초안 만들기' 후 ⚠ 항목을 하나로 고치기")
             if under:
@@ -3004,6 +3126,50 @@ with tab2:
             )
         if _legacy:
             st.caption("버전 기록이 없는 산출물(v2.10.0 이전 생성): " + " · ".join(_legacy))
+
+        # ──── v2.22.0: 🧩 미정 해결 — 엔진이 구체적 방법을 찾아 제안 ────
+        _open = collect_open_items(st.session_state.concept_card, st.session_state.core_arc,
+                                   st.session_state.get("resolved_items"))
+        _props = st.session_state.get("open_item_proposals") or {}
+        with st.expander(f"🧩 미정 해결 — 엔진 제안 (검색·창작) · 미정 {len(_open)}건 · 제안 대기 {len(_props)}건",
+                         expanded=bool(_props)):
+            st.caption("설계에 남은 '미정·작가 결정'과 작가님이 적은 질문을 엔진이 풉니다. 항목마다 서로 다른 장면형 안 3개를 "
+                       "만들고, 필요하면 웹 검색으로 실제 무술·경기 규칙·무협 관습을 참고합니다. 채택한 안만 작가 설정 잠금에 "
+                       "들어가 이후 Core Arc 재설계와 집필을 묶습니다. 항목당 1~2분.")
+            st.text_area("작가가 묻는 항목 (한 줄에 하나)", key="open_items_custom", height=90,
+                         placeholder="교내 선발대회 준결승에서 지훈이 주미를 치지 않고 이기는 구체적 방법\n"
+                                     "천하대회 본선에 나올 다른 학교 대표 4~6명 (학교·무공·약점)")
+            _custom = [x.strip(" -·") for x in (st.session_state.get("open_items_custom") or "").splitlines() if x.strip()]
+            _choices = _custom + [f"[{o['src']}] {o['text']}" for o in _open]
+            _pick = st.multiselect("풀 항목 (최대 5개)", _choices, default=_custom[:5], max_selections=5,
+                                   key="open_pick")
+            _srch = st.checkbox("웹 검색으로 참고 자료 찾기", value=True, key="open_search")
+            if st.button(f"🧩 {len(_pick)}건 제안 받기", type="primary", disabled=not _pick, key="open_go"):
+                _resolve_open_items(_pick, use_search=_srch)
+                st.rerun()
+            for _it, _pv in list(_props.items()):
+                st.markdown(f"---\n**{_it}**  ·  {_pv.get('at', '')}" + ("  ·  🔎 검색 사용" if _pv.get("searched") else ""))
+                _opts = _pv.get("options") or []
+                for _j, _o in enumerate(_opts):
+                    _rec = " ⭐ 엔진 추천" if _j == _pv.get("recommend", 0) else ""
+                    st.markdown(f"**안 {_j + 1}. {_o.get('title', '')}**{_rec}\n\n{_o.get('scene', '')}\n\n"
+                                f"- 맞는 이유: {_o.get('why_fits', '')}\n- 독자 쾌감: {_o.get('payoff', '')}\n"
+                                f"- 약점: {_o.get('risks', '')}" + (f"\n- 새로 필요: {_o['needs_new']}" if _o.get("needs_new") else ""))
+                    if st.button(f"안 {_j + 1} 채택 → 작가 설정 잠금", key=f"adopt_{abs(hash(_it)) % 10**8}_{_j}"):
+                        _adopt_proposal(_it, _o)
+                        st.rerun()
+                if _pv.get("research_notes"):
+                    st.caption("검색 참고: " + " / ".join(str(x) for x in _pv["research_notes"][:5]))
+                if _pv.get("sources"):
+                    st.caption("출처: " + " · ".join(f"[{x['title'][:40]}]({x['url']})" for x in _pv["sources"][:6]))
+                _c1, _c2 = st.columns(2)
+                if _c1.button("다시 제안", key=f"redo_{abs(hash(_it)) % 10**8}"):
+                    _resolve_open_items([_it], use_search=_srch)
+                    st.rerun()
+                if _c2.button("이 항목 버리기", key=f"drop_{abs(hash(_it)) % 10**8}"):
+                    _pp = dict(_props); _pp.pop(_it, None)
+                    st.session_state.open_item_proposals = _pp
+                    st.rerun()
         _uns_all = find_unsourced_characters(
             st.session_state.character_bible, st.session_state.concept_card,
             (st.session_state.brief_text or "") + "\n" + (st.session_state.author_direction or ""),

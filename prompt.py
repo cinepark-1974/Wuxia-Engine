@@ -1,10 +1,14 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.21.1 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.22.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.22.0 (2026-11-24) — 🧩 미정 해결: 엔진이 구체적 방법을 찾아 제안 (검색 + 창작)
+  · [작가 지시] "구체적인 방법도 엔진이 찾아내야 해. 검색을 하든 창조를 하든."
+  · collect_open_items() — 컨셉 카드·Core Arc에서 '미정·작가 결정·근거가 없다' 문장을 모은다
+  · build_resolve_open_item_prompt() — 항목마다 서로 다른 장면형 안 3개 + 추천 + 검색 참고 사실(확인한 것만)
 v2.21.1 (2026-11-24) — 초반 구성 요소를 작가 지정 원칙(1화 톤·일상의 붕괴 / 2화 관계·고난)으로 교체, 2화 O2 추가
 v2.21.0 (2026-11-24) — 1화 판 전체 제시 (모니터 의견: "초반 전개가 너무 느리다. 1화에 모든 상황이 나와야 한다")
   · 작가 지정 초반 구성: 1화 '세계관 톤과 일상의 붕괴' / 2화 '핵심 관계 형성과 고난의 본격화'
@@ -387,7 +391,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.21.1"
+ENGINE_VERSION = "v2.22.0"
 ENGINE_BUILD_DATE = "2026-11-22"
 
 # ═══════════════════════════════════════════════════
@@ -7844,6 +7848,88 @@ def build_glossary_draft(ledger, concept_card=None):
     out.append("# 상징 오브젝트 — 반응 조건과 회차당 상한 (예시, 고쳐서 쓰세요)")
     out.append("@상징 구슬 | 조건: 물리적 타격을 흡수할 때만 반응 | 회차당 2")
     return "\n".join(out)
+
+
+# ═══════════════════════════════════════════════════
+# v2.22.0 — 🧩 미정 해결: 엔진이 구체적 방법을 찾아 제안한다 (검색 + 창작)
+# ───────────────────────────────────────────────────
+# [작가 지시] "구체적인 방법도 엔진이 찾아내야 해. 검색을 하든 창조를 하든."
+# 기획·설계에 남은 '미정·작가 결정'과 작가가 적은 질문을 모아, 항목마다 서로 다른 안 3개를 만든다.
+# 결정은 작가가 클릭으로 한다 — 채택한 안만 작가 설정 잠금에 들어가 이후 설계·집필을 묶는다.
+_OPEN_RE = re.compile(r"미정|작가 결정|작가 확정 전|근거가 없다|작가 검토 중|정해지지 않")
+
+
+def collect_open_items(concept_card=None, core_arc=None, resolved=None, limit=40):
+    """설계 데이터에서 아직 정하지 않은 항목을 모은다 → [{"src","text"}] (중복·이미 채택한 것 제외)."""
+    resolved = set(resolved or [])
+    out, seen = [], set()
+
+    def add(src, text):
+        t = re.sub(r"\s+", " ", str(text or "")).strip()
+        if len(t) < 6 or t in seen or t in resolved:
+            return
+        seen.add(t)
+        out.append({"src": src, "text": t[:240]})
+
+    def walk(obj, path):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                walk(v, f"{path}.{k}" if path else str(k))
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                walk(v, f"{path}[{i}]")
+        elif isinstance(obj, str) and _OPEN_RE.search(obj):
+            for sent in re.split(r"(?<=[.!?。])\s+|\n+", obj):
+                if _OPEN_RE.search(sent):
+                    add(path, sent)
+
+    walk(concept_card or {}, "컨셉")
+    for e in (core_arc or []):
+        if isinstance(e, dict):
+            for k, v in e.items():
+                if isinstance(v, str) and _OPEN_RE.search(v):
+                    for sent in re.split(r"(?<=[.!?。])\s+|\n+", v):
+                        if _OPEN_RE.search(sent):
+                            add(f"Core Arc EP{e.get('ep')}", sent)
+    return out[:limit]
+
+
+def build_resolve_open_item_prompt(item, canon_text="", arc_context="", state_text="", use_search=True):
+    """미정 항목 하나 → 구체적인 안 3개. 검색은 참고용(실제 무술·대회 규칙·무협 관습), 결과물은 이 작품 설정 안의 창작."""
+    search_rule = ("필요하면 웹 검색으로 참고 자료를 찾는다 — 실제 무술 기법·체급·경기 규칙, 무협·웹소설에서 쓰인 관습, "
+                   "역사·지리 사실. 검색 결과의 문장을 옮기지 않고, 이 작품의 인물과 규칙으로 다시 만든다. "
+                   "다른 작품의 고유 설정(인물·초식 이름)은 가져오지 않는다." if use_search else
+                   "검색 없이 이 작품의 설정 안에서 만든다.")
+    return f"""당신은 한국 무협 웹소설의 수석 기획자입니다. 아래 작품에서 아직 정하지 않은 항목 하나를
+작가가 바로 고를 수 있게 **구체적인 안 3개**로 풉니다. {search_rule}
+
+## 풀어야 할 항목
+{item}
+
+## 지켜야 할 것
+- 안 3개는 서로 다른 방향이어야 한다 (같은 아이디어의 변형 3개 금지).
+- 추상어 금지. 누가, 어디서, 무엇을 해서, 어떤 결과가 나는지 장면으로 쓴다 (인물 이름·동작·대사 한 줄).
+- 아래 작품 설정·작가 설정 잠금·세계관 사전·상태 장부와 모순되지 않는다. 결핍 사다리 등 잠긴 순서를 깨지 않는다.
+- 장르 보상(통쾌함)과 세계관 규칙 안의 성립을 함께 따진다. 웹소설 독자가 납득할 근거를 한 줄로.
+- 새 인물이 필요하면 만들어도 된다 — 이름·소속·무공·약점을 함께 적고 needs_new에 표시한다.
+- 확인한 사실과 창작을 구분한다. 검색으로 확인한 것만 sources에 적고, 지어낸 출처를 적지 않는다.
+
+## 작품 설정 (작가 확정 사항 포함)
+{canon_text[:9000]}
+
+## 관련 설계 (Core Arc 발췌)
+{arc_context[:5000]}
+
+{state_text[:3000]}
+
+## 출력 — JSON만 (코드 블록 금지)
+{{"item": "풀어야 할 항목 한 줄",
+  "options": [
+    {{"title": "안 이름 (짧게)", "scene": "장면으로 쓴 구체적 방법 3~6문장", "why_fits": "설정·인물과 맞는 근거",
+      "payoff": "독자가 얻는 쾌감·질문", "risks": "약점이나 바꿔야 할 설정", "needs_new": "새로 필요한 인물·규칙 (없으면 \\"\\")"}}
+  ],
+  "recommend": 0,
+  "research_notes": ["검색으로 확인한 참고 사실 한 줄씩 (검색 안 했으면 빈 목록)"]}}"""
 
 
 def ledger_done_text(ledger, ep_number):
