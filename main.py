@@ -1,9 +1,10 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.21.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.21.1 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.21.1 (2026-11-24) — 기준표 O1(1화 7요소)·O2(2화 4요소) — 작가 지정 초반 구성 원칙
 v2.21.0 (2026-11-24) — 1화 판 전체 제시: 기준표 O1·Core Arc 규칙 12 (prompt·engine_validator). 구조 미달이라 자동 재집필 대상 아님 — 작가 확인
 v2.20.1 (2026-11-23) — DOCX 글꼴 함초롬바탕 통일: 표지·목차·본문·메타·기획서·무공 대전, 영문·숫자까지 (docx_builder)
 v2.20.0 (2026-11-22) — 대사·지문 줄바꿈 원칙 (작가 지정)
