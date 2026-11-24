@@ -1,9 +1,15 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.22.0 — main.py
+👖 BLUE JEANS WUXIA ENGINE v2.23.0 — main.py
 무협 웹소설 집필 엔진 (Streamlit Cloud 배포용)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.23.0 (2026-11-24) — 🪝 떡밥 스케줄 (1화 몰빵 · N화마다 회수)
+  · STEP 2 '🪝 떡밥 스케줄': 회수 단위(5/10화), 엔진 초안 만들기(Opus), 표 편집·저장, 점검(빈 구간·1화 떡밥 수·순서),
+    구간별 회수·공개 표
+  · Core Arc 생성·구간 재설계에 스케줄 주입, 회차 집필 연속성 블록에 '이번 화 회수 / 일부 공개 / 아직 풀면 안 됨 / 새로 던질 떡밥'
+  · 판정 H3: 회수 회차에 회수 장면이 없으면 미달, 회수 전 누설 문장은 🛠 보정에서 그 문장만 교정
+  · 현황판: 스케줄 없음·점검 문제 안내
 v2.22.0 (2026-11-24) — 🧩 미정 해결: 엔진이 구체적 방법을 찾아 제안 (검색 + 창작)
   · call_claude_research(): Anthropic 웹 검색 서버 도구(web_search_20250305, max_uses 5) 호출, pause_turn 이어 받기,
     인용 출처 수집. 검색이 막힌 계정이면 검색 없이 다시 호출
@@ -552,6 +558,8 @@ from prompt import (
     build_glossary_draft,                  # v2.19.0 — 세계관 사전 초안
     collect_open_items,                    # v2.22.0 — 미정 해결
     build_resolve_open_item_prompt,
+    normalize_hook_schedule, hook_schedule_check, hooks_for_episode,   # v2.23.0 — 떡밥 스케줄
+    build_hook_block, hook_schedule_text, build_hook_schedule_prompt,
     build_narrative_devices_prompt,
     build_narrative_device_block,
     NARRATIVE_DEVICE_FIELDS,
@@ -1151,6 +1159,8 @@ defaults = {
     "open_items_custom": "",      # v2.22.0 — 작가가 적은 풀 질문 (한 줄에 하나)
     "open_item_proposals": {},    # v2.22.0 — {항목: {"options","recommend","research_notes","sources","at"}}
     "resolved_items": [],         # v2.22.0 — 채택해 닫은 항목
+    "hook_schedule": [],          # v2.23.0 — 떡밥 스케줄 [{"id","question","plant","reveals","pay","how"}]
+    "hook_block": 5,              # v2.23.0 — 회수 단위 (5화 / 10화)
     "ledger_active": None,        # v2.15.0 — 대장 일괄 생성 진행 (세션 전용)
     "extension_mode": "bridge",
     "extension_eps": 50,
@@ -1242,6 +1252,8 @@ PROJECT_KEYS = [
     "open_items_custom",                # v2.22.0
     "open_item_proposals",
     "resolved_items",
+    "hook_schedule",                    # v2.23.0
+    "hook_block",
     # v2.12.0: 기준표 판정 · 기준점 원고
     "standard_results", "benchmarks", "benchmark_results",
 ]
@@ -1556,7 +1568,8 @@ def _continuity_for(ep, rating):
         glossary=st.session_state.get("canon_glossary") or "",
         roster_gaps=roster_gaps(_ledger(), _char_names() + list((st.session_state.get("minor_names") or {}).values()),
                                 ep - 1),
-    )
+    ) + ("\n\n" + build_hook_block(st.session_state.get("hook_schedule") or [], ep)
+         if st.session_state.get("hook_schedule") else "")
 
 
 def _resolve_open_items(items, use_search=True):
@@ -1597,6 +1610,21 @@ def _resolve_open_items(items, use_search=True):
         else:
             st.warning(f"제안을 읽지 못했습니다: {it[:50]}")
     prog.progress(1.0, text="완료")
+
+
+def _draft_hook_schedule(total, block):
+    """v2.23.0 — 엔진이 떡밥 스케줄 초안을 만든다 (Opus). 작가가 표에서 고친다."""
+    S = st.session_state
+    arc_txt = "\n".join(f"EP{x.get('ep')} {x.get('title', '')}: {str(x.get('main_scene', ''))[:180]}"
+                        for x in (S.get("core_arc") or []) if isinstance(x, dict))
+    d = safe_json(call_claude_opus(build_hook_schedule_prompt(S.get("concept_card"), arc_txt, total, block,
+                                                              S.get("canon_locks") or ""),
+                                   max_tokens=MAX_TOKENS_STRUCTURE))
+    rows = normalize_hook_schedule(d if isinstance(d, list) else [])
+    if rows:
+        S.hook_schedule = rows
+        autosave_project("떡밥 스케줄 초안")
+    return len(rows)
 
 
 def _adopt_proposal(item, opt):
@@ -1816,16 +1844,23 @@ def _judge_episode(ep, text, platform, rating="15금"):
     prev_hook = _prev_ending(ep, rating, 1000)          # v2.15.0 C2
     done = ledger_done_text(_ledger(), ep)              # v2.15.0 R1
     state = ledger_state_text(_ledger(), ep)            # v2.19.0 Q1
+    _hs = S.get("hook_schedule") or []                  # v2.23.0 H3
+    _hk_txt = build_hook_block(_hs, ep) if _hs else ""
+    _pay, _rev, _hold, _pl = hooks_for_episode(_hs, ep) if _hs else ([], [], [], [])
+    _hk_ids = ({"pay": [h["id"] for h in _pay], "hold": [h["id"] for h in _hold if h not in _pay]}
+               if _hk_txt else None)
     r = evaluate_episode_standard(
         text, ep,
         safe_json(call_claude(
             build_standard_check_prompt(text, ep, cc, S.episode_plots.get(ep), canon,
-                                        prev_hook=prev_hook, done_text=done, state_text=state),
+                                        prev_hook=prev_hook, done_text=done, state_text=state,
+                                        hook_text=_hk_txt),
             max_tokens=MAX_TOKENS_ANALYSIS, model=MODEL_SONNET,
         )),
         cc, platform, S.episode_plots.get(ep),
         has_prev_hook=bool(prev_hook), has_ledger=bool(done),
         symbol_rules=parse_symbol_rules(S.get("canon_glossary") or ""),
+        hook_ids=_hk_ids,
     )
     S.standard_results[ep] = r
     return r
@@ -2297,6 +2332,12 @@ def _render_work_board():
                                           for e in done):
                 steps.append("연속성 대장에 v2.19 새 항목(끝 상태·소지품·대사 기록)이 없습니다 — "
                              "🧾 연속성 대장에서 '이미 있는 대장도 다시 만든다'를 켜고 대장 만들기")
+            if not S.get("hook_schedule"):
+                steps.append("🪝 떡밥 스케줄 만들기 — STEP 2에서 '엔진 초안 만들기' 후 표에서 고치기 (1화 몰빵 · N화마다 회수)")
+            else:
+                _hiss = hook_schedule_check(S.get("hook_schedule"), core_n or 50, S.get("hook_block") or 5)
+                if _hiss:
+                    steps.append(f"떡밥 스케줄 점검 {len(_hiss)}건 — " + _hiss[0])
             _opn = collect_open_items(cc, S.get("core_arc"), S.get("resolved_items"))
             if _opn or S.get("open_item_proposals"):
                 steps.append(f"미정 {len(_opn)}건" + (f" · 채택 대기 제안 {len(S.get('open_item_proposals') or {})}건"
@@ -3170,6 +3211,52 @@ with tab2:
                     _pp = dict(_props); _pp.pop(_it, None)
                     st.session_state.open_item_proposals = _pp
                     st.rerun()
+        # ──── v2.23.0: 🪝 떡밥 스케줄 ────
+        _hs_now = normalize_hook_schedule(st.session_state.get("hook_schedule") or [])
+        _core_n = len(st.session_state.core_arc or []) or 50
+        with st.expander(f"🪝 떡밥 스케줄 — 1화 몰빵 · N화마다 회수 · {len(_hs_now)}개", expanded=False):
+            st.caption("1화에 떡밥을 몰아 던지고, 정한 단위(5화·10화)마다 회수나 중간 공개를 하나 이상 둡니다. "
+                       "이 표가 Core Arc 설계·구간 재설계·회차 집필·기준표 H3에 모두 들어갑니다. "
+                       "중간 공개는 '13:규칙 공개; 30:일부 정체'처럼 적습니다.")
+            _hb = st.radio("회수 단위", [5, 10], horizontal=True, key="hook_block",
+                           format_func=lambda x: f"{x}화마다")
+            if st.button("🪄 엔진 초안 만들기 (작품 설정·Core Arc에서 떡밥을 뽑아 배분)", key="hook_draft",
+                         disabled=bool(_hs_now) and not st.session_state.get("hook_draft_over")):
+                with st.spinner("떡밥 스케줄 초안을 만드는 중..."):
+                    _n = _draft_hook_schedule(_core_n, _hb)
+                st.success(f"떡밥 {_n}개 초안을 만들었습니다. 표에서 고쳐 주세요.") if _n else st.error("초안을 읽지 못했습니다.")
+                st.rerun()
+            if _hs_now:
+                st.checkbox("이미 있는 표를 엔진 초안으로 덮어쓰기 허용", key="hook_draft_over")
+            _rows = [{"id": h["id"], "질문": h["question"], "설치": h["plant"],
+                      "중간 공개": "; ".join(f"{r['ep']}:{r['what']}" for r in h["reveals"]),
+                      "회수": h["pay"], "회수 방식": h["how"]} for h in _hs_now] or \
+                    [{"id": "H1", "질문": "", "설치": 1, "중간 공개": "", "회수": 0, "회수 방식": ""}]
+            _ed = st.data_editor(_rows, num_rows="dynamic", use_container_width=True, key=f"hook_editor_{len(_hs_now)}",
+                                 column_config={"설치": st.column_config.NumberColumn(min_value=1, step=1),
+                                                "회수": st.column_config.NumberColumn(min_value=0, step=1)})
+            if st.button("💾 떡밥 스케줄 저장", key="hook_save"):
+                st.session_state.hook_schedule = normalize_hook_schedule(
+                    [{"id": r.get("id"), "question": r.get("질문"), "plant": r.get("설치"),
+                      "reveals_text": r.get("중간 공개"), "pay": r.get("회수"), "how": r.get("회수 방식")}
+                     for r in (_ed if isinstance(_ed, list) else _ed.to_dict("records"))])
+                autosave_project("떡밥 스케줄 저장")
+                st.rerun()
+            if _hs_now:
+                _iss = hook_schedule_check(_hs_now, _core_n, _hb)
+                if _iss:
+                    st.warning("점검: " + " · ".join(_iss[:10]))
+                else:
+                    st.success(f"점검 통과 — 1화 떡밥 {len([h for h in _hs_now if h['plant'] == 1])}개, "
+                               f"모든 {_hb}화 구간에 회수·공개가 있습니다.")
+                _tl = []
+                for _a in range(1, _core_n + 1, _hb):
+                    _b = min(_a + _hb - 1, _core_n)
+                    _ev = [f"{e}화 {h['id']}{'(회수)' if e == h['pay'] else '(공개)'}"
+                           for h in _hs_now for e in sorted({h["pay"], *[r["ep"] for r in h["reveals"]]}) if e and _a <= e <= _b]
+                    _tl.append({"구간": f"EP{_a}~{_b}", "회수·공개": " · ".join(_ev) or "—"})
+                st.dataframe(_tl, hide_index=True, use_container_width=True)
+
         _uns_all = find_unsourced_characters(
             st.session_state.character_bible, st.session_state.concept_card,
             (st.session_state.brief_text or "") + "\n" + (st.session_state.author_direction or ""),
@@ -3456,6 +3543,7 @@ with tab2:
                     storyline_acts=st.session_state.storyline_acts,
                     martial_bible=st.session_state.martial_bible,
                     canon_excerpt=build_canon_excerpt(_canon_episodes()),  # v2.10.0
+                    hook_text=hook_schedule_text(st.session_state.get("hook_schedule") or []),  # v2.23.0
                 )
                 _n = generate_arc_chunked(
                     "core_arc", "core_outline", 1, core_eps,
@@ -3547,6 +3635,7 @@ with tab2:
                                     mode="chunk", outline_text=_outline,
                                     prev_eps_text=json.dumps(_prev, ensure_ascii=False),
                                     ep_start=_a, ep_end=_b, revision_block=_blk,
+                                    hook_text=hook_schedule_text(st.session_state.get("hook_schedule") or []),
                                 ),
                                 max_tokens=MAX_TOKENS_ARC,
                             ))

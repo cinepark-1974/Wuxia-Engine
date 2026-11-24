@@ -1,10 +1,16 @@
 """
-👖 BLUE JEANS WUXIA ENGINE v2.22.0 — prompt.py
+👖 BLUE JEANS WUXIA ENGINE v2.23.0 — prompt.py
 무협 웹소설 집필 Rule Pack
 정통 무협 축(세계관·문파·한자) + 판타지 무협 축(회귀·전생·시스템·빙의·학원)
 © 2026 BLUE JEANS PICTURES
 
 [변경 이력]
+v2.23.0 (2026-11-24) — 🪝 떡밥 스케줄 (1화 몰빵 · N화마다 회수)
+  · [작가 지시] 1화에 모든 궁금증을 던지고 5화·10화 단위로 하나씩 회수, 대회 분량을 감안해 분산, 빠른 전개가 기본
+  · normalize_hook_schedule·hook_schedule_check(빈 구간·1화 떡밥 수·순서) · hooks_for_episode · build_hook_block(집필용)
+    · hook_schedule_text(설계용) · build_hook_schedule_prompt(엔진 초안)
+  · build_core_arc_prompt·outline(hook_text=) — 설계가 스케줄을 따른다. 연재 드라마 규칙 13
+  · 기준표 H3(필수, check="hooks"): 이번 화 회수 장면 유무 + 회수 전 떡밥의 답 누설 문장
 v2.22.0 (2026-11-24) — 🧩 미정 해결: 엔진이 구체적 방법을 찾아 제안 (검색 + 창작)
   · [작가 지시] "구체적인 방법도 엔진이 찾아내야 해. 검색을 하든 창조를 하든."
   · collect_open_items() — 컨셉 카드·Core Arc에서 '미정·작가 결정·근거가 없다' 문장을 모은다
@@ -391,7 +397,7 @@ import re  # v2.11.0 — 정본 기획서 표시 인식
 # Engine Metadata
 # ═══════════════════════════════════════════════════
 
-ENGINE_VERSION = "v2.22.0"
+ENGINE_VERSION = "v2.23.0"
 ENGINE_BUILD_DATE = "2026-11-22"
 
 # ═══════════════════════════════════════════════════
@@ -4383,6 +4389,8 @@ CORE_ARC_DESIGN = """[Core Arc 완결형 설계 원칙]
    2화 = 핵심 관계 형성과 고난의 본격화 — 파트너·라이벌·방해자·악역 투입, 관계가 급변하는 사건(충돌·계약·오해·위기),
          쉽게 못 넘는 벽, 3화에서 본격화될 목표나 반격의 단서로 끝.
    설명 최소화(사건과 행동으로), 속도감(1화 사건 발생 → 2화 관계 충돌과 위기 심화). 1~2화 무료 구간에서 매력과 갈등 구조를 증명.
+13. 떡밥 스케줄 (v2.23.0): 1화에 떡밥을 몰아 던지고, 5화(또는 작가가 정한 단위) 구간마다 회수나 중간 공개를 최소 1개 둔다.
+   작가 확정 스케줄이 있으면 그 회수 회차의 비트에 회수를 넣고, 회수 전 회차에서는 답을 흘리지 않는다.
 """
 
 
@@ -4940,7 +4948,7 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
                           storyline_acts=None, martial_bible=None,
                           canon_excerpt="", mode=None, outline_text="",
                           prev_eps_text="", ep_start=None, ep_end=None,
-                          revision_block=""):
+                          revision_block="", hook_text=""):
     """Core Arc 50화 생성.
 
     v2.4.0: 기획서 막 구조(storyline_acts)와 초식 바이블을 재료로 주입.
@@ -4993,6 +5001,7 @@ def build_core_arc_prompt(concept_card, core_eps=50, producer_note="",
 
 {CORE_ARC_DESIGN}
 
+{hook_text}
 {_core_arc_task_block(mode, core_eps, outline_text, prev_eps_text, ep_start, ep_end, revision_block)}
 
 ## 출력 형식
@@ -5046,11 +5055,11 @@ def _core_arc_count_line(mode, core_eps, ep_start, ep_end):
 
 
 def build_core_arc_outline_prompt(concept_card, core_eps=50, producer_note="",
-                                  storyline_acts=None, martial_bible=None, canon_excerpt=""):
-    """v2.12.3 — Core Arc 전체 뼈대. 재료는 Core Arc와 같고, 출력만 회차당 한 줄."""
+                                  storyline_acts=None, martial_bible=None, canon_excerpt="", hook_text=""):
+    """v2.12.3 — Core Arc 전체 뼈대. 재료는 Core Arc와 같고, 출력만 회차당 한 줄. v2.23.0: 떡밥 스케줄."""
     full = build_core_arc_prompt(concept_card, core_eps=core_eps, producer_note=producer_note,
                                  storyline_acts=storyline_acts, martial_bible=martial_bible,
-                                 canon_excerpt=canon_excerpt, mode="outline")
+                                 canon_excerpt=canon_excerpt, mode="outline", hook_text=hook_text)
     head = full.split("## 출력 형식\n각 회차별로")[0]
     return f"""{head}
 ## 이번 작업 — 뼈대만
@@ -7016,6 +7025,9 @@ WUXIA_STANDARD_EPISODE = [
      "name": "대사·지문 줄바꿈",
      "criterion": "대사는 따옴표로 시작하는 독립 문단, 지문은 다른 문단, 두 인물의 대사는 한 문단에 없다. "
                   "예외: 대사 바로 뒤 짧은 화자 표시(말했다·물었다…), 문장 속 인용(“…”라고/“…” 하고) — v2.20.0"},
+    {"id": "H3", "axis": "연재", "need": "필수", "check": "hooks", "applies": "hooks",
+     "name": "떡밥 스케줄",
+     "criterion": "이번 화에 회수하기로 한 떡밥의 회수 장면이 있고, 아직 회수 전인 떡밥의 답을 말해 버리는 문장이 없다 — v2.23.0"},
     {"id": "T2", "axis": "문체", "need": "권장", "check": "static", "applies": "always",
      "name": "어휘 반복 상한",
      "criterion": "'처음' 1회, 비유('~처럼/~것 같았다/~듯') 5회, 문장 첫머리 '대신/다만' 4회 이하 — v2.19.0"},
@@ -7106,7 +7118,8 @@ EP2_ESSENTIALS = [
 EARLY_ESSENTIALS = {"O1": EP1_ESSENTIALS, "O2": EP2_ESSENTIALS}
 
 
-def standard_items_for(concept_card=None, has_plot=True, has_prev_hook=False, has_ledger=False, ep_number=0):
+def standard_items_for(concept_card=None, has_plot=True, has_prev_hook=False, has_ledger=False, ep_number=0,
+                       has_hooks=False):
     """이 작품·회차에 적용되는 회차 기준표 항목. ep_number=1이면 1화 전용 항목(O1)이 붙는다."""
     ap = standard_applies(concept_card)
     out = []
@@ -7115,6 +7128,8 @@ def standard_items_for(concept_card=None, has_plot=True, has_prev_hook=False, ha
         if a == "ep1" and int(ep_number or 0) != 1:
             continue
         if a == "ep2" and int(ep_number or 0) != 2:
+            continue
+        if a == "hooks" and not has_hooks:
             continue
         if a == "prev_hook" and not has_prev_hook:
             continue
@@ -7200,7 +7215,7 @@ def build_planning_standard_block(concept_card=None):
 
 def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
                                 episode_plot=None, canon_text="", budget=24000,
-                                prev_hook="", done_text="", state_text=""):
+                                prev_hook="", done_text="", state_text="", hook_text=""):
     """판정관 프롬프트 — 집필(Opus)과 분리된 Sonnet이 근거 문장만 뽑는다.
 
     판정(충족/미달)은 이 응답으로 하지 않는다. 코드가 인용을 본문과 대조해 판정한다.
@@ -7209,9 +7224,13 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
     scenes = [sc for sc in (plot.get("scenes") or []) if isinstance(sc, dict)]
     items = [it for it in standard_items_for(concept_card, has_plot=bool(scenes),
                                              has_prev_hook=bool(prev_hook), has_ledger=bool(done_text),
-                                             ep_number=ep_number)
+                                             ep_number=ep_number, has_hooks=bool(hook_text))
              if it["check"] != "static"]
+    hook_judge_block = ("\n" + hook_text + "\n(H3 — 위 표 기준)\n") if hook_text else ""
     o1_block = ""
+    if hook_text:
+        o1_block += (',\n  "H3": {"paid": [{"id": "회수한 떡밥 id", "quote": "회수 장면의 본문 문장"}], '
+                     '"leaks": [{"id": "아직 회수 전인 떡밥 id", "quote": "그 답을 말해 버린 본문 문장"}]}')
     for _oid, _ess in EARLY_ESSENTIALS.items():
         if any(it["id"] == _oid for it in items):
             o1_block += (',\n  "' + _oid + '": [' + ", ".join(f'{{"element": "{k}", "quote": ""}}' for k, _ in _ess)
@@ -7247,7 +7266,7 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
 ## 작가 확정 사항 · 채택표 · 세계관 (K1 — 이것과 어긋나는 본문 문장)
 {canon}
 
-{prev_block}{done_block}{state_block}
+{prev_block}{done_block}{state_block}{hook_judge_block}
 ## EP{ep_number} 본문
 {body}
 
@@ -7263,7 +7282,7 @@ def build_standard_check_prompt(episode_text, ep_number, concept_card=None,
   "Q1": [{{"quote": "", "conflicts_with": "모순되는 장부 기록 한 줄 (예: EP3 끝 봉 끝이 가슴뼈에 닿음)"}}],
   "D1": [{{"quote": "", "conflicts_with": "무엇이 틀렸나 (주술 호응·연어·나열 비약·논리 점프)"}}]{o1_block}
 }}
-items에는 위 기준 중 P1·K1·R1·Q1·D1·O1·O2를 뺀 모든 번호를 넣는다. R1·Q1 장부가 없으면 빈 목록.
+items에는 위 기준 중 P1·K1·R1·Q1·D1·O1·O2·H3를 뺀 모든 번호를 넣는다. R1·Q1 장부가 없으면 빈 목록.
 O1(1화)·O2(2화)는 요소마다 그 요소가 드러난 본문 문장을 그대로 하나씩. 본문에 없으면 quote를 비운다 — 지어내지 않는다.
 D1은 명백한 비문만 고른다 — 문체 취향은 고르지 않는다. 최대 6개.
 JSON 외 텍스트 금지. 코드 블록 금지."""
@@ -7930,6 +7949,148 @@ def build_resolve_open_item_prompt(item, canon_text="", arc_context="", state_te
   ],
   "recommend": 0,
   "research_notes": ["검색으로 확인한 참고 사실 한 줄씩 (검색 안 했으면 빈 목록)"]}}"""
+
+
+# ═══════════════════════════════════════════════════
+# v2.23.0 — 🪝 떡밥 스케줄: 1화에 몰아 던지고 N화마다 하나씩 회수
+# ───────────────────────────────────────────────────
+# [작가 지시] "1화에 몰빵하고, 그 떡밥들을 5화나 10화 단위로 하나씩 풀게. 대회 분량 감안해서 분산을 잘 해야
+#  1화를 본 독자가 기다린다. 속도 전개가 매우 빠르다. 그게 기본이고 1화에 모든 궁금증을 일으킬 요소를 다 넣는다."
+# 스케줄 한 줄 = {"id","question","plant","reveals":[{"ep","what"}],"pay","how"}.
+# 설계(Core Arc)·집필(연속성 블록)·판정(기준표 H3)이 모두 이 표를 따른다. 표는 작가가 고친다.
+
+def normalize_hook_schedule(rows):
+    """data_editor·JSON 어느 쪽에서 와도 같은 모양으로. 회차는 정수, 중간 공개는 '13:규칙 공개; 41:정체' 문자열도 받는다."""
+    out = []
+    for i, r in enumerate(rows or []):
+        if not isinstance(r, dict):
+            continue
+        q = str(r.get("question") or r.get("질문") or "").strip()
+        if not q:
+            continue
+        def _int(v, d=0):
+            try:
+                return int(float(str(v).strip()))
+            except Exception:
+                return d
+        rv = r.get("reveals") if isinstance(r.get("reveals"), list) else []
+        if not rv:
+            raw = str(r.get("reveals_text") or r.get("중간 공개") or "")
+            for part in re.split(r"[;\n]", raw):
+                m = re.match(r"\s*(\d+)\s*[:：화]?\s*(.*)", part)
+                if m:
+                    rv.append({"ep": int(m.group(1)), "what": m.group(2).strip()})
+        rv = [{"ep": _int(x.get("ep")), "what": str(x.get("what") or "")} for x in rv
+              if isinstance(x, dict) and _int(x.get("ep"))]
+        out.append({"id": str(r.get("id") or f"H{i + 1}"), "question": q,
+                    "plant": _int(r.get("plant") or r.get("설치"), 1),
+                    "reveals": sorted(rv, key=lambda x: x["ep"]),
+                    "pay": _int(r.get("pay") or r.get("회수")),
+                    "how": str(r.get("how") or r.get("회수 방식") or "").strip()})
+    return out
+
+
+def hook_schedule_check(schedule, total_eps=50, block=5, ep1_min=6):
+    """스케줄 점검 → [문제 한 줄]. 빈 블록(회수·공개가 하나도 없는 N화 구간), 1화 떡밥 수, 순서 오류."""
+    sch = normalize_hook_schedule(schedule)
+    issues = []
+    if not sch:
+        return ["떡밥 스케줄이 비어 있음"]
+    ep1 = [h for h in sch if h["plant"] == 1]
+    if len(ep1) < ep1_min:
+        issues.append(f"1화에 던지는 떡밥 {len(ep1)}개 — {ep1_min}개 이상 권장 (1화 몰빵)")
+    for h in sch:
+        if not h["pay"]:
+            issues.append(f"{h['id']} '{h['question'][:30]}' 회수 회차 없음")
+        elif h["pay"] < h["plant"]:
+            issues.append(f"{h['id']} 회수({h['pay']}화)가 설치({h['plant']}화)보다 앞섬")
+        elif h["pay"] > total_eps:
+            issues.append(f"{h['id']} 회수 {h['pay']}화가 전체 {total_eps}화를 넘음")
+        for r in h["reveals"]:
+            if r["ep"] < h["plant"] or (h["pay"] and r["ep"] > h["pay"]):
+                issues.append(f"{h['id']} 중간 공개 {r['ep']}화가 설치~회수 밖")
+    events = {}
+    for h in sch:
+        for e in [h["pay"]] + [r["ep"] for r in h["reveals"]]:
+            if e:
+                events.setdefault(e, []).append(h["id"])
+    for a in range(1, total_eps + 1, block):
+        b = min(a + block - 1, total_eps)
+        if not any(a <= e <= b for e in events):
+            issues.append(f"EP{a}~{b}: 회수·공개가 하나도 없음 — 독자가 기다릴 답이 없는 구간")
+    return issues
+
+
+def hooks_for_episode(schedule, ep):
+    """이 회차에서 → (pay: 끝까지 푸는 떡밥, reveal: 일부 드러내는 것, hold: 아직 풀면 안 되는 떡밥, plant: 새로 던질 떡밥)."""
+    sch = normalize_hook_schedule(schedule)
+    pay = [h for h in sch if h["pay"] == ep]
+    reveal = [(h, r) for h in sch for r in h["reveals"] if r["ep"] == ep]
+    hold = [h for h in sch if h["plant"] <= ep < (h["pay"] or 10 ** 6) and h not in pay]
+    plant = [h for h in sch if h["plant"] == ep]
+    return pay, reveal, hold, plant
+
+
+def build_hook_block(schedule, ep):
+    """집필·판정용 — 이번 화의 떡밥 지시."""
+    pay, reveal, hold, plant = hooks_for_episode(schedule, ep)
+    if not (pay or reveal or hold or plant):
+        return ""
+    parts = ["### 🪝 떡밥 스케줄 — 이번 화 (작가 확정표, 이대로 지킨다)"]
+    if plant:
+        parts.append("- 이번 화에 질문으로 던질 떡밥 (답은 주지 않는다): " + " / ".join(f"{h['id']} {h['question']}" for h in plant))
+        if ep == 1:
+            parts.append("  → 1화 몰빵: 위 떡밥을 모두 장면 속 질문으로 던진다. 설명이 아니라 사건·대사·이상한 디테일로.")
+    if pay:
+        parts.append("- 이번 화에서 **끝까지 푸는** 떡밥 (회수 장면을 반드시 넣는다): "
+                     + " / ".join(f"{h['id']} {h['question']} → {h['how'] or '회수 방식 작가 결정'}" for h in pay))
+    if reveal:
+        parts.append("- 이번 화에서 **일부만** 드러내는 것: " + " / ".join(f"{h['id']} {r['what'] or h['question']}" for h, r in reveal))
+    held = [h for h in hold if all(h is not x for x, _ in reveal)]
+    if held:
+        parts.append("- 아직 풀면 안 되는 떡밥 (답을 말하거나 확정하지 않는다, 질문을 키우는 건 좋다): "
+                     + " / ".join(f"{h['id']} {h['question']} ({h['pay']}화 회수)" for h in held[:12]))
+    return "\n".join(parts)
+
+
+def hook_schedule_text(schedule):
+    """Core Arc 설계용 — 표 전체."""
+    sch = normalize_hook_schedule(schedule)
+    if not sch:
+        return ""
+    lines = ["## 🪝 떡밥 스케줄 (작가 확정표 — 회수 회차의 비트에 그 회수를 넣고, 회수 전에는 답을 흘리지 않는다)"]
+    for h in sch:
+        rv = "; ".join(f"{r['ep']}화 {r['what']}" for r in h["reveals"])
+        lines.append(f"- {h['id']} {h['question']} — 설치 {h['plant']}화" + (f" · 중간 공개 {rv}" if rv else "")
+                     + f" · 회수 {h['pay']}화" + (f" ({h['how']})" if h["how"] else ""))
+    return "\n".join(lines)
+
+
+def build_hook_schedule_prompt(concept_card=None, arc_text="", total_eps=50, block=5, locks="", ep1_min=6):
+    """엔진이 떡밥 스케줄 초안을 만든다 — 작품 설정에서 미스터리를 뽑아 1화 몰빵 + N화마다 회수로 배분."""
+    cc = json.dumps(concept_card or {}, ensure_ascii=False)[:9000]
+    return f"""당신은 한국 웹소설 연재 기획자입니다. 아래 작품의 떡밥(독자가 답을 기다리는 질문)을 뽑아
+{total_eps}화 연재 스케줄로 배분합니다. 기준은 빠른 전개입니다 (화산귀환형: 정점에서 시작, 아끼지 않고 쏟아붓기).
+
+## 규칙
+1. 1화에 떡밥을 {ep1_min}개 이상 던진다 (plant=1). 1화를 본 독자가 모든 궁금증을 갖게 한다.
+2. {block}화 구간마다 회수(pay) 또는 중간 공개(reveals)가 최소 1개 있다. 빈 구간이 없게.
+3. 큰 떡밥은 중간 공개 1~2번으로 끌고 가다 후반에 회수한다. 작은 떡밥은 일찍 끝내고 새 질문으로 바꾼다.
+4. 대회·결전 회차에는 그 경기와 맞물린 회수를 둔다 (경기 결과 = 떡밥의 답).
+5. 작품 설정과 작가 설정 잠금에 있는 사건·순서를 깨지 않는다. 설정에 없는 답이 필요하면 how에 '작가 결정'이라고 적는다.
+6. question은 독자가 품는 질문 한 줄 ('지훈은 결승에서 일어서나'). how는 회수 장면 한 줄.
+
+## 작품
+{cc}
+
+## 작가 설정 잠금
+{(locks or '')[:3000]}
+
+## 현재 설계 (참고)
+{arc_text[:7000]}
+
+## 출력 — JSON 배열만
+[{{"id": "H1", "question": "", "plant": 1, "reveals": [{{"ep": 13, "what": "일부 공개 한 줄"}}], "pay": 41, "how": "회수 장면 한 줄"}}]"""
 
 
 def ledger_done_text(ledger, ep_number):

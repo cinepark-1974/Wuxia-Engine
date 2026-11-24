@@ -5,6 +5,7 @@
 · 초식 일관성 정적 검사 · 장르 밀도 정적 검사
 
 [변경 이력]
+v2.23.0 (2026-11-24) — 기준표 H3 떡밥 스케줄 (회수 장면 유무·회수 전 누설)
 v2.21.0 (2026-11-24) — 기준표 O1(1화)·O2(2화) 초반 구성 요소 판정 (check="elements")
 v2.20.0 (2026-11-22) — format_dialogue_paragraphs()·dialogue_layout_issues(): 대사·지문 줄바꿈 원칙, 기준표 F1
 v2.19.0 (2026-11-22) — 문체 검증기 style_scan() (T1 필수·T2 권장), roster_gaps(), 기준표 Q1·D1 위반 수집
@@ -3016,7 +3017,7 @@ def _std_locate(quote: str, text: str, _cache: dict = None) -> Optional[float]:
 def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
                               concept_card=None, platform: str = "문피아",
                               episode_plot=None, has_prev_hook: bool = False,
-                              has_ledger: bool = False, symbol_rules=None) -> dict:
+                              has_ledger: bool = False, symbol_rules=None, hook_ids=None) -> dict:
     """회차 기준표 판정.
 
     Returns:
@@ -3031,7 +3032,8 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
     plot = episode_plot if isinstance(episode_plot, dict) else {}
     scenes = [sc for sc in (plot.get("scenes") or []) if isinstance(sc, dict)]
     items = standard_items_for(concept_card, has_plot=bool(scenes),
-                               has_prev_hook=has_prev_hook, has_ledger=has_ledger, ep_number=ep_number)
+                               has_prev_hook=has_prev_hook, has_ledger=has_ledger, ep_number=ep_number,
+                               has_hooks=hook_ids is not None)
     llm = llm_result if isinstance(llm_result, dict) else {}
     llm_items = llm.get("items") if isinstance(llm.get("items"), dict) else {}
     have_llm = bool(llm_items) or bool(llm.get("P1")) or "K1" in llm
@@ -3083,6 +3085,26 @@ def evaluate_episode_standard(text: str, ep_number: int = 0, llm_result=None,
             continue
         if not have_llm:
             row(it, "판정 불가", "판정관 응답 없음")
+            continue
+        if chk == "hooks":         # v2.23.0 H3 — 떡밥 스케줄
+            h3 = llm.get("H3") if isinstance(llm.get("H3"), dict) else {}
+            need = list((hook_ids or {}).get("pay") or [])
+            paid = {str(x.get("id")) for x in (h3.get("paid") or [])
+                    if isinstance(x, dict) and x.get("quote") and _std_locate(str(x["quote"]), text, cache) is not None}
+            miss = [h for h in need if h not in paid]
+            hold = set((hook_ids or {}).get("hold") or [])
+            leaks = [x for x in (h3.get("leaks") or []) if isinstance(x, dict) and str(x.get("id")) in hold
+                     and x.get("quote") and _std_locate(str(x["quote"]), text, cache) is not None]
+            more_vios.extend({"quote": str(x["quote"])[:120],
+                              "conflicts_with": f"[H3] {x.get('id')}은 아직 회수 전 — 답을 말하지 말고 질문으로 남긴다"}
+                             for x in leaks)
+            d = []
+            if miss:
+                d.append("회수 장면 없음: " + ", ".join(miss))
+            if leaks:
+                d.append(f"회수 전 누설 {len(leaks)}문장")
+            row(it, "충족" if not d else "미달", " / ".join(d) if d else
+                (f"회수 {', '.join(need)} 확인" if need else "누설 없음"))
             continue
         if chk == "elements":      # v2.21.0 O1(1화)·O2(2화) — 초반 구성 요소
             from prompt import EARLY_ESSENTIALS
